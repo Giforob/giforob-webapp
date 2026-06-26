@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>GIF Text Editor</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- URL params: ?w=WIDTH&h=HEIGHT&thumb=BASE64URL_JPEG -->
+    <style>
+        :root {
+            --bg:       var(--tg-theme-bg-color, #ffffff);
+            --text:     var(--tg-theme-text-color, #000000);
+            --hint:     var(--tg-theme-hint-color, #999999);
+            --btn:      var(--tg-theme-button-color, #2481cc);
+            --btn-text: var(--tg-theme-button-text-color, #ffffff);
+            --sec-bg:   var(--tg-theme-secondary-bg-color, #f0f0f0);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 12px;
+            padding-bottom: 80px;
+            font-size: 15px;
+        }
+
+        /* ── Section card ── */
+        .card {
+            background: var(--sec-bg);
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+        .card-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--hint);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Text input ── */
+        textarea {
+            width: 100%;
+            min-height: 72px;
+            background: var(--bg);
+            color: var(--text);
+            border: 1.5px solid transparent;
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 15px;
+            resize: vertical;
+            outline: none;
+            font-family: inherit;
+            transition: border-color .15s;
+        }
+        .seg-item.active textarea { border-color: var(--btn); }
+        .add-seg-btn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 8px;
+            background: none;
+            color: var(--btn);
+            border: 1.5px solid var(--btn);
+            border-radius: 10px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        /* ── Row label ── */
+        .row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .row:last-child { margin-bottom: 0; }
+        .row-label { color: var(--text); }
+        .val-badge {
+            min-width: 38px;
+            text-align: right;
+            font-size: 13px;
+            color: var(--hint);
+        }
+
+        /* ── Range ── */
+        input[type="range"] {
+            flex: 1;
+            margin: 0 10px;
+            accent-color: var(--btn);
+            cursor: pointer;
+        }
+
+        /* ── Select ── */
+        select {
+            background: var(--bg);
+            color: var(--text);
+            border: none;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 14px;
+            outline: none;
+            max-width: 58%;
+            cursor: pointer;
+        }
+
+        /* ── Color chips ── */
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-bottom: 10px;
+        }
+        .chip {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: 2.5px solid transparent;
+            transition: border-color .15s, transform .1s;
+            flex-shrink: 0;
+        }
+        .chip.selected { border-color: var(--btn); transform: scale(1.12); }
+
+        /* ── Color picker row ── */
+        .picker-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .picker-row span { color: var(--hint); font-size: 13px; }
+        input[type="color"] {
+            width: 40px; height: 32px;
+            border: none; background: none;
+            padding: 2px; cursor: pointer;
+            border-radius: 6px;
+        }
+
+        /* ── Position buttons ── */
+        .pos-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 7px;
+        }
+        .pos-btn {
+            background: var(--bg);
+            color: var(--text);
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 10px 4px;
+            font-size: 13px;
+            cursor: pointer;
+            text-align: center;
+            transition: border-color .15s, color .15s;
+            line-height: 1.4;
+        }
+        .pos-btn.selected {
+            border-color: var(--btn);
+            color: var(--btn);
+        }
+
+        /* ── Time inputs ── */
+        .time-row { display: flex; gap: 8px; }
+        .time-row input {
+            flex: 1;
+            background: var(--bg);
+            color: var(--text);
+            border: none;
+            border-radius: 8px;
+            padding: 9px 10px;
+            font-size: 14px;
+            outline: none;
+            text-align: center;
+        }
+        .time-row input::placeholder { color: var(--hint); }
+
+        /* ── Preview canvas ── */
+        #preview {
+            width: 100%;
+            border-radius: 10px;
+            display: block;
+            background: #111;
+            touch-action: none;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+<!-- PREVIEW (top) -->
+<div class="card" style="padding-bottom:10px">
+    <div class="card-title">Попередній перегляд</div>
+    <div style="position:relative;width:100%;border-radius:10px;overflow:hidden;background:#111">
+        <canvas id="preview" style="width:100%;display:block"></canvas>
+        <div id="no-gif-hint" style="
+            display:none;position:absolute;inset:0;
+            align-items:center;justify-content:center;
+            color:rgba(255,255,255,.45);font-size:13px;text-align:center;padding:8px">
+            Відправте гіфку боту,<br>щоб побачити превʼю
+        </div>
+    </div>
+    <div id="drag-reset-row" style="display:none;text-align:center;padding-top:8px">
+        <a href="#" onclick="resetDrag(); return false;"
+           style="font-size:12px;color:var(--hint);text-decoration:none">✖ Скинути позицію тексту</a>
+    </div>
+</div>
+
+<!-- TEXTS -->
+<div class="card">
+    <div class="card-title">Тексти</div>
+    <div id="segments-list"></div>
+    <button class="add-seg-btn" onclick="addSegment()">+ Додати текст</button>
+</div>
+
+<!-- TEXT COLOR -->
+<div class="card">
+    <div class="card-title">Колір тексту</div>
+    <div class="chips" id="text-chips"></div>
+    <div class="picker-row">
+        <span>Свій колір</span>
+        <input type="color" id="text-picker" value="#ffffff" oninput="onPickerChange('text')">
+    </div>
+</div>
+
+<!-- BORDER -->
+<div class="card">
+    <div class="card-title">Обводка</div>
+    <div class="chips" id="border-chips"></div>
+    <div class="picker-row">
+        <span>Свій колір</span>
+        <input type="color" id="border-picker" value="#000000" oninput="onPickerChange('border')">
+    </div>
+    <div class="row" style="margin-top:10px">
+        <span class="row-label">Розмір</span>
+        <input type="range" id="border-size" min="0" max="30" value="3"
+               oninput="$('border-size-val').textContent=this.value; redraw()">
+        <span class="val-badge" id="border-size-val">3</span>
+    </div>
+</div>
+
+<!-- POSITION -->
+<div class="card">
+    <div class="card-title">Позиція тексту</div>
+    <div class="pos-grid">
+        <button class="pos-btn selected" data-pos="up"    onclick="selectPos(this)">⬆️<br>Зверху</button>
+        <button class="pos-btn"          data-pos="above" onclick="selectPos(this)">🔼<br>Над гіфкою</button>
+        <button class="pos-btn"          data-pos="down"  onclick="selectPos(this)">⬇️<br>Знизу</button>
+    </div>
+</div>
+
+<!-- PAD OPTIONS (visible only for "above" position) -->
+<div class="card" id="pad-options" style="display:none">
+    <div class="card-title">Налаштування паду (над гіфкою)</div>
+    <div class="chips" id="pad-chips"></div>
+    <div class="picker-row">
+        <span>Свій колір</span>
+        <input type="color" id="pad-picker" value="#ffffff" oninput="onPickerChange('pad')">
+    </div>
+    <div class="row" style="margin-top:10px">
+        <span class="row-label">Додатковий відступ</span>
+        <input type="range" id="pad-extra" min="0" max="200" value="0"
+               oninput="$('pad-extra-val').textContent=this.value; redraw()">
+        <span class="val-badge" id="pad-extra-val">0</span>
+    </div>
+</div>
+
+
+
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+const $ = id => document.getElementById(id);
+
+// ── URL params ──
+const _params      = new URLSearchParams(window.location.search);
+const GIF_W        = parseInt(_params.get('w')   || '640');
+const GIF_H        = parseInt(_params.get('h')   || '360');
+const THUMB_B64URL = _params.get('thumb') || '';
+const INITIAL_POS  = _params.get('pos')   || 'up';
+const GIF_DUR      = parseFloat(_params.get('dur') || '0');
+
+// ── Thumbnail ──
+let thumbImg = null;
+if (THUMB_B64URL) {
+    let b64 = THUMB_B64URL.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    thumbImg = new Image();
+    thumbImg.onload  = redraw;
+    thumbImg.onerror = () => { thumbImg = null; redraw(); };
+    thumbImg.src = 'data:image/jpeg;base64,' + b64;
+} else {
+    $('no-gif-hint').style.display = 'flex';
+}
+
+// ── Color palette ──
+const NAMED_COLORS = [
+    { name: "Білий",        hex: "#ffffff", ffmpeg: "white"   },
+    { name: "Чорний",       hex: "#000000", ffmpeg: "black"   },
+    { name: "Червоний",     hex: "#ff0000", ffmpeg: "red"     },
+    { name: "Блакитний",    hex: "#0000ff", ffmpeg: "blue"    },
+    { name: "Зелений",      hex: "#008000", ffmpeg: "green"   },
+    { name: "Жовтий",       hex: "#ffff00", ffmpeg: "yellow"  },
+    { name: "Фіолетовий",   hex: "#ee82ee", ffmpeg: "violet"  },
+    { name: "Помаранчевий", hex: "#ffa500", ffmpeg: "orange"  },
+    { name: "Сірий",        hex: "#808080", ffmpeg: "gray"    },
+    { name: "Рожевий",      hex: "#ffc0cb", ffmpeg: "pink"    },
+    { name: "Коричневий",   hex: "#964b00", ffmpeg: "#964B00" },
+];
+
+// ── Font options & canvas font loader ──
+const FONT_OPTIONS = [
+    ['fonts/impact.ttf',                     'Impact (стандарт)'],
+    ['fonts/Horror.ttf',                     'Horror'],
+    ['fonts/Glitch.ttf',                     'Glitch'],
+    ['fonts/QuinqueFive.ttf',                'Quinque Five'],
+    ['fonts/Boncegro.ttf',                   'Boncegro'],
+    ['fonts/beer_money.ttf',                 'Beer Money'],
+    ['fonts/Rutenia_Bold.otf',               'Rutenia Bold'],
+    ['fonts/RubikWetPaint-Regular.ttf',      'Rubik Wet Paint'],
+    ['fonts/RubikVinyl-Regular.ttf',         'Rubik Vinyl'],
+    ['fonts/RubikPuddles-Regular.ttf',       'Rubik Puddles'],
+    ['fonts/Rubik-Microbe-Regular.ttf',      'Rubik Microbe'],
+    ['fonts/RubikMaze-Regular.ttf',          'Rubik Maze'],
+    ['fonts/ComforterBrush-Regular.ttf',     'Comforter Brush'],
+    ['fonts/AlumniSansPinstripe-Regular.ttf','Alumni Sans Pinstripe'],
+    ['fonts/MarckScript-Regular.ttf',        'Marck Script'],
+    ['fonts/Rubik-Bubbles-Regular.ttf',      'Rubik Bubbles'],
+    ['fonts/NotoSans-Regular.ttf',           'Noto Sans'],
+];
+const _fontCache = {};  // path → family-name | null (loading) | false (error)
+function loadFont(path) {
+    if (path in _fontCache) return;
+    if (/impact/i.test(path)) { _fontCache[path] = 'Impact'; return; }
+    _fontCache[path] = null;
+    const family = 'GBF_' + path.split('/').pop().replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
+    new FontFace(family, `url(${path})`).load()
+        .then(f => { document.fonts.add(f); _fontCache[path] = family; redraw(); })
+        .catch(() => { _fontCache[path] = false; });
+}
+function canvasFont(path, sizePx) {
+    const fam = _fontCache[path] || 'Impact';
+    return `bold ${sizePx}px "${fam}", Impact, Arial, sans-serif`;
+}
+loadFont('fonts/impact.ttf');
+
+let textColor   = { hex: "#ffffff", ffmpeg: "white" };
+let borderColor = { hex: "#000000", ffmpeg: "black" };
+let padColor    = { hex: "#ffffff", ffmpeg: "white" };
+let selectedPos  = INITIAL_POS;
+let isDragging   = false;
+let lastScale    = 1;
+let lastFontSize = 40;
+let lastPadH     = 0;
+
+// ── Segments ──
+let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, font: 'fonts/impact.ttf' }];
+let activeSegIdx = 0;
+
+function fmtTime(t) {
+    if (t >= 9999 || (GIF_DUR > 0 && t >= GIF_DUR)) return '🔚';
+    return t.toFixed(1) + 'с';
+}
+
+function renderSegments() {
+    const list = $('segments-list');
+    list.innerHTML = '';
+    segments.forEach((seg, i) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'seg-item' + (i === activeSegIdx ? ' active' : '');
+
+        // Header
+        const hdr = document.createElement('div');
+        hdr.className = 'row';
+        hdr.style.marginBottom = '6px';
+        const lbl = document.createElement('span');
+        lbl.className = 'row-label';
+        lbl.textContent = segments.length > 1 ? `Текст ${i + 1}` : 'Текст';
+        hdr.appendChild(lbl);
+        if (segments.length > 1) {
+            const rm = document.createElement('button');
+            rm.textContent = '✕';
+            rm.style.cssText = 'background:none;border:none;color:var(--hint);font-size:16px;cursor:pointer;padding:0 4px;line-height:1';
+            rm.onclick = () => removeSegment(i);
+            hdr.appendChild(rm);
+        }
+        wrap.appendChild(hdr);
+
+        // Textarea
+        const ta = document.createElement('textarea');
+        ta.placeholder = 'Введіть текст...\nМожна кілька рядків';
+        ta.value = seg.text;
+        ta.oninput = () => { segments[i].text = ta.value; if (i === activeSegIdx) redraw(); };
+        ta.onfocus = () => {
+            if (activeSegIdx !== i) {
+                activeSegIdx = i;
+                $('drag-reset-row').style.display = segments[i].anchorX !== null ? 'block' : 'none';
+                renderSegments();
+                redraw();
+            }
+        };
+        wrap.appendChild(ta);
+
+        // Font size per segment
+        const fsRow    = document.createElement('div');
+        fsRow.className = 'row';
+        fsRow.style.marginTop = '8px';
+        const fsLbl    = document.createElement('span');
+        fsLbl.className = 'row-label';
+        fsLbl.textContent = 'Розмір';
+        const fsBadge  = document.createElement('span');
+        fsBadge.className = 'val-badge';
+        fsBadge.textContent = seg.sizeFont || 40;
+        const fsSlider = document.createElement('input');
+        fsSlider.type = 'range'; fsSlider.min = 5; fsSlider.max = 200;
+        fsSlider.value = seg.sizeFont || 40;
+        fsSlider.oninput = () => {
+            segments[i].sizeFont = parseInt(fsSlider.value);
+            fsBadge.textContent  = fsSlider.value;
+            redraw();
+        };
+        fsRow.append(fsLbl, fsSlider, fsBadge);
+        wrap.appendChild(fsRow);
+
+        // Font per segment
+        const fntRow = document.createElement('div');
+        fntRow.className = 'row';
+        fntRow.style.marginTop = '8px';
+        const fntLbl = document.createElement('span');
+        fntLbl.className = 'row-label';
+        fntLbl.textContent = 'Шрифт';
+        const fntSel = document.createElement('select');
+        const curFont = seg.font || 'fonts/impact.ttf';
+        FONT_OPTIONS.forEach(([val, label]) => {
+            const opt = document.createElement('option');
+            opt.value = val; opt.textContent = label;
+            if (curFont === val) opt.selected = true;
+            fntSel.appendChild(opt);
+        });
+        fntSel.oninput = () => {
+            segments[i].font = fntSel.value;
+            loadFont(fntSel.value);
+            redraw();
+        };
+        fntRow.append(fntLbl, fntSel);
+        wrap.appendChild(fntRow);
+
+        // Transparency per segment
+        [['textAlpha', 'Прозорість тексту'], ['borderAlpha', 'Прозорість обводки']].forEach(([key, label]) => {
+            const aRow   = document.createElement('div');
+            aRow.className = 'row';
+            aRow.style.marginTop = '8px';
+            const aLbl   = document.createElement('span');
+            aLbl.className = 'row-label';
+            aLbl.textContent = label;
+            const aBadge = document.createElement('span');
+            aBadge.className = 'val-badge';
+            const aInit  = Math.round((seg[key] ?? 1) * 100);
+            aBadge.textContent = aInit + '%';
+            const aSlider = document.createElement('input');
+            aSlider.type = 'range'; aSlider.min = 0; aSlider.max = 100;
+            aSlider.value = aInit;
+            aSlider.oninput = () => {
+                segments[i][key] = parseInt(aSlider.value) / 100;
+                aBadge.textContent = aSlider.value + '%';
+                redraw();
+            };
+            aRow.append(aLbl, aSlider, aBadge);
+            wrap.appendChild(aRow);
+        });
+
+        // Time controls
+        const tWrap = document.createElement('div');
+        tWrap.style.marginTop = '8px';
+        if (GIF_DUR > 0) {
+            ['timeStart', 'timeEnd'].forEach((key, ki) => {
+                const isStart = ki === 0;
+                const row = document.createElement('div');
+                row.className = 'row';
+                row.style.marginTop = isStart ? '0' : '4px';
+                const rl = document.createElement('span');
+                rl.className = 'row-label';
+                rl.textContent = isStart ? 'Старт' : 'Кінець';
+                const badge = document.createElement('span');
+                badge.className = 'val-badge';
+                badge.textContent = fmtTime(seg[key]);
+                const range = document.createElement('input');
+                range.type = 'range'; range.min = 0; range.max = GIF_DUR; range.step = 0.1;
+                range.value = Math.min(seg[key], GIF_DUR);
+                range.oninput = () => {
+                    let v = parseFloat(range.value);
+                    if (isStart) v = Math.min(v, segments[i].timeEnd - 0.1);
+                    else         v = Math.max(v, segments[i].timeStart + 0.1);
+                    range.value = v; segments[i][key] = v; badge.textContent = fmtTime(v);
+                };
+                row.append(rl, range, badge);
+                tWrap.appendChild(row);
+            });
+        } else {
+            const tRow = document.createElement('div');
+            tRow.className = 'time-row';
+            [['timeStart', 'Старт, с'], ['timeEnd', 'Кінець, с']].forEach(([k, ph]) => {
+                const inp = document.createElement('input');
+                inp.type = 'text'; inp.placeholder = ph; inp.inputMode = 'decimal';
+                inp.value = seg[k] > 0 && seg[k] < 9999 ? seg[k].toFixed(1) : '';
+                inp.oninput = () => { segments[i][k] = parseFloat(inp.value) || (k === 'timeEnd' ? 9999 : 0); };
+                tRow.appendChild(inp);
+            });
+            tWrap.appendChild(tRow);
+        }
+        wrap.appendChild(tWrap);
+
+        if (i < segments.length - 1) {
+            const sep = document.createElement('hr');
+            sep.style.cssText = 'border:none;border-top:1px solid var(--hint);opacity:0.2;margin:12px 0 0';
+            wrap.appendChild(sep);
+        }
+        list.appendChild(wrap);
+    });
+}
+
+function addSegment() {
+    const last = segments[segments.length - 1];
+    segments.push({
+        text:      '',
+        timeStart: GIF_DUR > 0 ? Math.min(last.timeEnd, GIF_DUR - 0.1) : 0,
+        timeEnd:   GIF_DUR > 0 ? GIF_DUR : 9999,
+        anchorX:   null,
+        anchorY:   null,
+        sizeFont:    40,
+        textAlpha:   1,
+        borderAlpha: 1,
+        font:        'fonts/impact.ttf',
+    });
+    activeSegIdx = segments.length - 1;
+    renderSegments();
+    const tas = $('segments-list').querySelectorAll('textarea');
+    if (tas[activeSegIdx]) tas[activeSegIdx].focus();
+}
+
+function removeSegment(i) {
+    if (segments.length <= 1) return;
+    segments.splice(i, 1);
+    if (activeSegIdx >= segments.length) activeSegIdx = segments.length - 1;
+    renderSegments();
+    redraw();
+}
+
+// ── Color chip grids ──
+function buildChips(containerId, pickerEl, initHex, onChange) {
+    const container = $(containerId);
+    NAMED_COLORS.forEach(c => {
+        const chip = document.createElement('div');
+        chip.className = 'chip' + (c.hex === initHex ? ' selected' : '');
+        chip.style.background = c.hex;
+        chip.title = c.name;
+        if (c.hex === '#ffffff' || c.hex === '#ffff00')
+            chip.style.boxShadow = 'inset 0 0 0 1px #ccc';
+        chip.onclick = () => {
+            container.querySelectorAll('.chip').forEach(el => el.classList.remove('selected'));
+            chip.classList.add('selected');
+            pickerEl.value = c.hex;
+            onChange({ hex: c.hex, ffmpeg: c.ffmpeg });
+            redraw();
+        };
+        container.appendChild(chip);
+    });
+}
+
+buildChips('text-chips',   $('text-picker'),   "#ffffff", v => { textColor   = v; });
+buildChips('border-chips', $('border-picker'), "#000000", v => { borderColor = v; });
+buildChips('pad-chips',    $('pad-picker'),    "#ffffff", v => { padColor    = v; });
+
+function onPickerChange(which) {
+    const hex = $(which + '-picker').value;
+    document.querySelectorAll(`#${which}-chips .chip`).forEach(el => el.classList.remove('selected'));
+    const val = { hex, ffmpeg: hex.replace('#', '0x') };
+    if (which === 'text') textColor = val;
+    else if (which === 'border') borderColor = val;
+    else padColor = val;
+    redraw();
+}
+
+function selectPos(btn) {
+    document.querySelectorAll('.pos-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    selectedPos = btn.dataset.pos;
+    segments.forEach(s => { s.anchorX = null; s.anchorY = null; });
+    $('drag-reset-row').style.display = 'none';
+    $('pad-options').style.display = selectedPos === 'above' ? 'block' : 'none';
+    redraw();
+}
+
+// ── Apply initial position from URL ──
+(function applyInitialPos() {
+    const btn = document.querySelector(`.pos-btn[data-pos="${INITIAL_POS}"]`);
+    if (btn) {
+        document.querySelectorAll('.pos-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+    }
+    $('pad-options').style.display = INITIAL_POS === 'above' ? 'block' : 'none';
+})();
+
+// ── Canvas preview ──
+function redraw() {
+    const canvas = $('preview');
+    const dpr    = window.devicePixelRatio || 1;
+    const W      = canvas.offsetWidth || canvas.parentElement.offsetWidth;
+    const scale  = W / GIF_W;
+    const H      = Math.round(W * GIF_H / GIF_W);
+
+    // Active segment drives pad / canvas-height calculations
+    const activeSeg    = segments[activeSegIdx] || segments[0];
+    const activeText   = activeSeg.text || 'Текст тут';
+    const activeLines  = activeText.split('\n');
+    const activeSzFont = activeSeg.sizeFont || 40;
+    const activeNumSym = Math.max(Math.max(...activeLines.map(l => l.length)), 10);
+    const activeNumGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * activeSzFont * (GIF_W / 15 / activeNumSym);
+    const activeFontPx   = activeNumGifPx * scale;
+
+    const borderSz = parseInt($('border-size').value) * scale;
+    lastScale    = scale;
+    lastFontSize = activeFontPx;
+
+    let padH = 0, gifOffsetY = 0;
+    if (selectedPos === 'above') {
+        const padExtra = parseInt($('pad-extra').value) || 0;
+        padH       = (activeLines.length * activeNumGifPx + activeSzFont + padExtra) * scale;
+        gifOffsetY = padH;
+    }
+    lastPadH = padH;
+
+    const totalH = H + padH;
+    canvas.width        = W * dpr;
+    canvas.height       = totalH * dpr;
+    canvas.style.height = totalH + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    if (padH > 0) {
+        ctx.fillStyle = padColor.hex;
+        ctx.fillRect(0, 0, W, padH);
+    }
+
+    if (thumbImg && thumbImg.complete && thumbImg.naturalWidth > 0) {
+        ctx.drawImage(thumbImg, 0, gifOffsetY, W, H);
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.fillRect(0, gifOffsetY, W, H);
+    } else {
+        // Checkerboard — makes transparency visually meaningful in the preview
+        const sq = 16;
+        for (let cx = 0; cx < W; cx += sq) {
+            for (let cy = gifOffsetY; cy < gifOffsetY + H; cy += sq) {
+                ctx.fillStyle = ((Math.floor(cx / sq) + Math.floor((cy - gifOffsetY) / sq)) % 2 === 0) ? '#cccccc' : '#ffffff';
+                ctx.fillRect(cx, cy, Math.min(sq, W - cx), Math.min(sq, gifOffsetY + H - cy));
+            }
+        }
+    }
+
+    // Draw ALL segments — active at full opacity, others dimmed
+    ctx.textAlign = 'center';
+    segments.forEach((seg, idx) => {
+        const isActive = idx === activeSegIdx;
+        const rawText  = seg.text || (isActive ? 'Текст тут' : '');
+        if (!rawText) return;
+
+        const lines    = rawText.split('\n');
+        const szFont   = seg.sizeFont || 40;
+        const numSym   = Math.max(Math.max(...lines.map(l => l.length)), 10);
+        const numGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / numSym);
+        const fontSize = numGifPx * scale;
+        const lineH    = fontSize * 1.05;
+
+        let textCenterX, baseY;
+        if (seg.anchorX !== null) {
+            textCenterX = seg.anchorX;
+            baseY       = seg.anchorY;
+        } else if (selectedPos === 'above') {
+            const padExtra = parseInt($('pad-extra').value) || 0;
+            textCenterX = W / 2;
+            baseY = ((szFont + padExtra) / 2) * scale + fontSize * 0.75;
+        } else if (selectedPos === 'up') {
+            textCenterX = W / 2;
+            baseY = 10 * scale + fontSize * 0.75;
+        } else {
+            textCenterX = W / 2;
+            baseY = (GIF_H - 10 - lines.length * numGifPx) * scale + fontSize * 0.75;
+        }
+
+        const dimAlpha  = isActive ? 1.0 : 0.55;
+        const segTAlpha = (seg.textAlpha   ?? 1) * dimAlpha;
+        const segBAlpha = (seg.borderAlpha ?? 1) * dimAlpha;
+        ctx.font = canvasFont(seg.font || 'fonts/impact.ttf', fontSize);
+        lines.forEach((line, li) => {
+            const y = baseY + li * lineH;
+            if (parseInt($('border-size').value) > 0) {
+                ctx.globalAlpha = segBAlpha;
+                ctx.strokeStyle = borderColor.hex;
+                ctx.lineWidth   = borderSz;
+                ctx.lineJoin    = 'round';
+                ctx.strokeText(line, textCenterX, y);
+            }
+            ctx.globalAlpha = segTAlpha;
+            ctx.fillStyle   = textColor.hex;
+            ctx.fillText(line, textCenterX, y);
+        });
+    });
+    ctx.globalAlpha = 1;
+}
+
+// ── Drag to reposition (all modes including 'above') ──
+const canvasEl = $('preview');
+canvasEl.addEventListener('pointerdown', (e) => {
+    const rect = canvasEl.getBoundingClientRect();
+    let nx = e.clientX - rect.left;
+    let ny = e.clientY - rect.top;
+    // In above mode: keep text within the pad area
+    if (selectedPos === 'above' && lastPadH > 0)
+        ny = Math.max(lastFontSize * 0.75, Math.min(ny, lastPadH - lastFontSize * 0.25));
+    segments[activeSegIdx].anchorX = nx;
+    segments[activeSegIdx].anchorY = ny;
+    isDragging  = true;
+    canvasEl.setPointerCapture(e.pointerId);
+    $('drag-reset-row').style.display = 'block';
+    redraw();
+});
+canvasEl.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    const rect = canvasEl.getBoundingClientRect();
+    let nx = e.clientX - rect.left;
+    let ny = e.clientY - rect.top;
+    if (selectedPos === 'above' && lastPadH > 0)
+        ny = Math.max(lastFontSize * 0.75, Math.min(ny, lastPadH - lastFontSize * 0.25));
+    segments[activeSegIdx].anchorX = nx;
+    segments[activeSegIdx].anchorY = ny;
+    redraw();
+});
+canvasEl.addEventListener('pointerup',     () => { isDragging = false; });
+canvasEl.addEventListener('pointercancel', () => { isDragging = false; });
+
+function resetDrag() {
+    segments[activeSegIdx].anchorX = null;
+    segments[activeSegIdx].anchorY = null;
+    $('drag-reset-row').style.display = 'none';
+    redraw();
+}
+
+// ── Listeners ──
+window.addEventListener('resize', redraw);
+
+// ── Main Button ──
+tg.MainButton.setText('✅ Застосувати');
+tg.MainButton.show();
+tg.MainButton.onClick(() => {
+    if (!segments.some(s => s.text.trim())) {
+        tg.showAlert('Будь ласка, введіть текст!');
+        return;
+    }
+
+    const isAbove   = selectedPos === 'above';
+    const isCustom0 = segments[0].anchorX !== null;
+    const position  = isCustom0 && isAbove ? 'above_custom'
+                    : isCustom0            ? 'custom'
+                    :                        selectedPos;
+
+    const segsOut = segments.map(s => {
+        const isC    = s.anchorX !== null;
+        const sPos   = isC && isAbove ? 'above_custom' : isC ? 'custom' : selectedPos;
+        const szFont = s.sizeFont || 40;
+        const sLines = (s.text || 'a').split('\n');
+        const sNumSym  = Math.max(Math.max(...sLines.map(l => l.length)), 10);
+        const sNumGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / sNumSym);
+        const sFontPx  = sNumGifPx * lastScale;
+        return {
+            text:          s.text.trim(),
+            time_start:    s.timeStart.toString(),
+            time_end:      (GIF_DUR > 0 && s.timeEnd >= GIF_DUR) || s.timeEnd >= 9999
+                           ? 't' : s.timeEnd.toFixed(1),
+            position:      sPos,
+            custom_cx:     isC ? s.anchorX / lastScale : 0,
+            custom_cy_top: isC ? (s.anchorY - sFontPx * 0.75) / lastScale : 0,
+            size_font:     szFont,
+            text_alpha:    s.textAlpha   ?? 1,
+            border_alpha:  s.borderAlpha ?? 1,
+            font:          s.font || 'fonts/impact.ttf',
+        };
+    });
+    const seg0 = segsOut[0];
+
+    tg.sendData(JSON.stringify({
+        text:          seg0.text,
+        font:          seg0.font || 'fonts/impact.ttf',
+        text_color:    textColor.ffmpeg,
+        border_color:  borderColor.ffmpeg,
+        size_font:     seg0.size_font,
+        size_border:   parseInt($('border-size').value),
+        text_alpha:    seg0.text_alpha  ?? 1,
+        border_alpha:  seg0.border_alpha ?? 1,
+        position,
+        custom_cx:     seg0.custom_cx,
+        custom_cy_top: seg0.custom_cy_top,
+        pad_color:     padColor.ffmpeg,
+        pad_extra:     parseInt($('pad-extra').value) || 0,
+        time_start:    seg0.time_start,
+        time_end:      seg0.time_end,
+        segments:      segsOut,
+    }));
+});
+
+// ── Initialize ──
+renderSegments();
+requestAnimationFrame(redraw);
+</script>
+</body>
+</html>
