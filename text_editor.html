@@ -234,7 +234,7 @@
     </div>
     <div class="row" style="margin-top:10px">
         <span class="row-label">Розмір</span>
-        <input type="range" id="border-size" min="0" max="30" value="3"
+        <input type="range" id="border-size" min="0" max="100" value="3"
                oninput="$('border-size-val').textContent=this.value; redraw()">
         <span class="val-badge" id="border-size-val">3</span>
     </div>
@@ -358,7 +358,7 @@ let lastFontSize = 40;
 let lastPadH     = 0;
 
 // ── Segments ──
-let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, font: 'fonts/impact.ttf' }];
+let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf' }];
 let activeSegIdx = 0;
 
 function fmtTime(t) {
@@ -449,29 +449,50 @@ function renderSegments() {
         fntRow.append(fntLbl, fntSel);
         wrap.appendChild(fntRow);
 
-        // Transparency per segment
-        [['textAlpha', 'Прозорість тексту'], ['borderAlpha', 'Прозорість обводки']].forEach(([key, label]) => {
-            const aRow   = document.createElement('div');
-            aRow.className = 'row';
-            aRow.style.marginTop = '8px';
-            const aLbl   = document.createElement('span');
-            aLbl.className = 'row-label';
-            aLbl.textContent = label;
-            const aBadge = document.createElement('span');
-            aBadge.className = 'val-badge';
-            const aInit  = Math.round((seg[key] ?? 1) * 100);
-            aBadge.textContent = aInit + '%';
-            const aSlider = document.createElement('input');
-            aSlider.type = 'range'; aSlider.min = 0; aSlider.max = 100;
-            aSlider.value = aInit;
-            aSlider.oninput = () => {
-                segments[i][key] = parseInt(aSlider.value) / 100;
-                aBadge.textContent = aSlider.value + '%';
-                redraw();
-            };
-            aRow.append(aLbl, aSlider, aBadge);
-            wrap.appendChild(aRow);
-        });
+        // Border size per segment
+        const bsRow    = document.createElement('div');
+        bsRow.className = 'row';
+        bsRow.style.marginTop = '8px';
+        const bsLbl    = document.createElement('span');
+        bsLbl.className = 'row-label';
+        bsLbl.textContent = 'Обводка';
+        const bsBadge  = document.createElement('span');
+        bsBadge.className = 'val-badge';
+        bsBadge.textContent = seg.borderSize ?? 3;
+        const bsSlider = document.createElement('input');
+        bsSlider.type = 'range'; bsSlider.min = 0; bsSlider.max = 100;
+        bsSlider.value = seg.borderSize ?? 3;
+        bsSlider.oninput = () => {
+            segments[i].borderSize = parseInt(bsSlider.value);
+            bsBadge.textContent    = bsSlider.value;
+            redraw();
+        };
+        bsRow.append(bsLbl, bsSlider, bsBadge);
+        wrap.appendChild(bsRow);
+
+        // Transparency per segment (one slider controls both text and border)
+        const aRow   = document.createElement('div');
+        aRow.className = 'row';
+        aRow.style.marginTop = '8px';
+        const aLbl   = document.createElement('span');
+        aLbl.className = 'row-label';
+        aLbl.textContent = 'Прозорість';
+        const aBadge = document.createElement('span');
+        aBadge.className = 'val-badge';
+        const aInit  = Math.round((seg.textAlpha ?? 1) * 100);
+        aBadge.textContent = aInit + '%';
+        const aSlider = document.createElement('input');
+        aSlider.type = 'range'; aSlider.min = 0; aSlider.max = 100;
+        aSlider.value = aInit;
+        aSlider.oninput = () => {
+            const v = parseInt(aSlider.value) / 100;
+            segments[i].textAlpha   = v;
+            segments[i].borderAlpha = v;
+            aBadge.textContent = aSlider.value + '%';
+            redraw();
+        };
+        aRow.append(aLbl, aSlider, aBadge);
+        wrap.appendChild(aRow);
 
         // Time controls
         const tWrap = document.createElement('div');
@@ -534,6 +555,7 @@ function addSegment() {
         sizeFont:    40,
         textAlpha:   1,
         borderAlpha: 1,
+        borderSize:  parseInt($('border-size').value) || 3,
         font:        'fonts/impact.ttf',
     });
     activeSegIdx = segments.length - 1;
@@ -622,7 +644,6 @@ function redraw() {
     const activeNumGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * activeSzFont * (GIF_W / 15 / activeNumSym);
     const activeFontPx   = activeNumGifPx * scale;
 
-    const borderSz = parseInt($('border-size').value) * scale;
     lastScale    = scale;
     lastFontSize = activeFontPx;
 
@@ -693,15 +714,16 @@ function redraw() {
         }
 
         const dimAlpha  = isActive ? 1.0 : 0.55;
-        const segTAlpha = (seg.textAlpha   ?? 1) * dimAlpha;
-        const segBAlpha = (seg.borderAlpha ?? 1) * dimAlpha;
+        const segTAlpha  = (seg.textAlpha   ?? 1) * dimAlpha;
+        const segBAlpha  = (seg.borderAlpha ?? 1) * dimAlpha;
+        const segBorderSz = (seg.borderSize ?? parseInt($('border-size').value) ?? 3) * scale;
         ctx.font = canvasFont(seg.font || 'fonts/impact.ttf', fontSize);
         lines.forEach((line, li) => {
             const y = baseY + li * lineH;
-            if (parseInt($('border-size').value) > 0) {
+            if (segBorderSz > 0) {
                 ctx.globalAlpha = segBAlpha;
                 ctx.strokeStyle = borderColor.hex;
-                ctx.lineWidth   = borderSz;
+                ctx.lineWidth   = segBorderSz;
                 ctx.lineJoin    = 'round';
                 ctx.strokeText(line, textCenterX, y);
             }
@@ -787,6 +809,7 @@ tg.MainButton.onClick(() => {
             size_font:     szFont,
             text_alpha:    s.textAlpha   ?? 1,
             border_alpha:  s.borderAlpha ?? 1,
+            border_size:   s.borderSize  ?? parseInt($('border-size').value) ?? 3,
             font:          s.font || 'fonts/impact.ttf',
         };
     });
