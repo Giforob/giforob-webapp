@@ -548,7 +548,7 @@ function addSegment() {
     const last = segments[segments.length - 1];
     segments.push({
         text:      '',
-        timeStart: GIF_DUR > 0 ? Math.min(last.timeEnd, GIF_DUR - 0.1) : 0,
+        timeStart: 0,
         timeEnd:   GIF_DUR > 0 ? GIF_DUR : 9999,
         anchorX:   null,
         anchorY:   null,
@@ -627,6 +627,33 @@ function selectPos(btn) {
     $('pad-options').style.display = INITIAL_POS === 'above' ? 'block' : 'none';
 })();
 
+// ── Word-wrap (mirrors Python _wrap_text / add_text_to_gif logic) ──
+function wrapText(text, maxChars) {
+    const resultLines = [];
+    for (const line of text.split('\n')) {
+        if (line.length <= maxChars) { resultLines.push(line); continue; }
+        const words = line.split(' ');
+        let current = '';
+        for (let word of words) {
+            while (word.length > maxChars) {
+                if (current) { resultLines.push(current); current = ''; }
+                resultLines.push(word.slice(0, maxChars));
+                word = word.slice(maxChars);
+            }
+            if (!current) { current = word; }
+            else if (current.length + 1 + word.length <= maxChars) { current += ' ' + word; }
+            else { resultLines.push(current); current = word; }
+        }
+        if (current) resultLines.push(current);
+    }
+    return resultLines.join('\n');
+}
+function applyWrap(text) {
+    const maxChars = Math.max(10, Math.floor(GIF_W / 12));
+    const maxLen   = text.split('\n').reduce((m, l) => Math.max(m, l.length), 0);
+    return maxLen > maxChars ? wrapText(text, maxChars) : text;
+}
+
 // ── Canvas preview ──
 function redraw() {
     const canvas = $('preview');
@@ -637,7 +664,7 @@ function redraw() {
 
     // Active segment drives pad / canvas-height calculations
     const activeSeg    = segments[activeSegIdx] || segments[0];
-    const activeText   = activeSeg.text || 'Текст тут';
+    const activeText   = applyWrap(activeSeg.text || 'Текст тут');
     const activeLines  = activeText.split('\n');
     const activeSzFont = activeSeg.sizeFont || 40;
     const activeNumSym = Math.max(Math.max(...activeLines.map(l => l.length)), 10);
@@ -689,8 +716,8 @@ function redraw() {
         const isActive = idx === activeSegIdx;
         const rawText  = seg.text || (isActive ? 'Текст тут' : '');
         if (!rawText) return;
-
-        const lines    = rawText.split('\n');
+        const displayText = applyWrap(rawText);
+        const lines    = displayText.split('\n');
         const szFont   = seg.sizeFont || 40;
         const numSym   = Math.max(Math.max(...lines.map(l => l.length)), 10);
         const numGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / numSym);
