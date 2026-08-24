@@ -796,14 +796,15 @@ function redraw() {
         if (seg.anchorX !== null) {
             textCenterX = seg.anchorX;
             // anchorY is the visual centre of the text block; convert to baseline of first line
-            baseY       = seg.anchorY - lines.length * lineH / 2 + 0.75 * fontSize;
+            // 0.86 = Impact ascent fraction (cap-height / em-size)
+            baseY       = seg.anchorY - lines.length * lineH / 2 + 0.86 * fontSize;
         } else if (selectedPos === 'above') {
             const padExtra = parseInt($('pad-extra').value) || 0;
             textCenterX = W / 2;
-            baseY = ((szFont + padExtra) / 2) * scale + fontSize * 0.75;
+            baseY = ((szFont + padExtra) / 2) * scale + fontSize * 0.86;
         } else if (selectedPos === 'up') {
             textCenterX = W / 2;
-            baseY = 10 * scale + fontSize * 0.75;
+            baseY = 10 * scale + fontSize * 0.86;
         } else {
             textCenterX = W / 2;
             // Anchor the last-line baseline at (GIF_H-10)*scale so dashes and
@@ -818,6 +819,13 @@ function redraw() {
         const segTC = seg.textColor   || textColor;
         const segBC = seg.borderColor || borderColor;
         ctx.font = canvasFont(seg.font || 'fonts/impact.ttf', fontSize);
+        // Use the browser's own glyph measurement so any character (dashes, caps, etc.)
+        // gets the exact GIF-space y regardless of its height within the em-square.
+        {
+            const m   = ctx.measureText(lines[0] || 'Т');
+            const asc = m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : fontSize * 0.86;
+            seg._cyTopGif = Math.max(0, (baseY - asc) / scale);
+        }
         lines.forEach((line, li) => {
             const y = baseY + li * lineH;
             if (segBorderSz > 0) {
@@ -906,7 +914,7 @@ tg.MainButton.onClick(() => {
                            ? 't' : s.timeEnd.toFixed(1),
             position:      sPos,
             custom_cx:     isC ? s.anchorX / lastScale : 0,
-            custom_cy_top: isC ? (s.anchorY - sFontPx * nLines * 0.525) / lastScale : 0,
+            custom_cy_top: s._cyTopGif != null ? s._cyTopGif : 0,
             size_font:     szFont,
             text_alpha:    s.textAlpha   ?? 1,
             border_alpha:  s.borderAlpha ?? 1,
