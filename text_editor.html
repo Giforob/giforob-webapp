@@ -190,7 +190,7 @@
 <body>
 
 <!-- PREVIEW (top) -->
-<div class="card" style="padding-bottom:10px">
+<div class="card" style="padding-bottom:10px; position:sticky; top:0; z-index:10; box-shadow:0 2px 12px rgba(0,0,0,0.18);">
     <div class="card-title">Попередній перегляд</div>
     <div style="position:relative;width:100%;border-radius:10px;overflow:hidden;background:#111">
         <canvas id="preview" style="width:100%;display:block"></canvas>
@@ -214,25 +214,10 @@
     <button class="add-seg-btn" onclick="addSegment()">+ Додати текст</button>
 </div>
 
-<!-- TEXT COLOR -->
+<!-- BORDER SIZE -->
 <div class="card">
-    <div class="card-title">Колір тексту</div>
-    <div class="chips" id="text-chips"></div>
-    <div class="picker-row">
-        <span>Свій колір</span>
-        <input type="color" id="text-picker" value="#ffffff" oninput="onPickerChange('text')">
-    </div>
-</div>
-
-<!-- BORDER -->
-<div class="card">
-    <div class="card-title">Обводка</div>
-    <div class="chips" id="border-chips"></div>
-    <div class="picker-row">
-        <span>Свій колір</span>
-        <input type="color" id="border-picker" value="#000000" oninput="onPickerChange('border')">
-    </div>
-    <div class="row" style="margin-top:10px">
+    <div class="card-title">Розмір обводки</div>
+    <div class="row">
         <span class="row-label">Розмір</span>
         <input type="range" id="border-size" min="0" max="100" value="3"
                oninput="$('border-size-val').textContent=this.value; redraw()">
@@ -358,7 +343,7 @@ let lastFontSize = 40;
 let lastPadH     = 0;
 
 // ── Segments ──
-let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf' }];
+let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf', textColor: { hex: '#ffffff', ffmpeg: 'white' }, borderColor: { hex: '#000000', ffmpeg: 'black' } }];
 let activeSegIdx = 0;
 
 function fmtTime(t) {
@@ -494,6 +479,92 @@ function renderSegments() {
         aRow.append(aLbl, aSlider, aBadge);
         wrap.appendChild(aRow);
 
+        // Text color per segment
+        const tcWrap = document.createElement('div');
+        tcWrap.style.marginTop = '8px';
+        const tcTitleRow = document.createElement('div');
+        tcTitleRow.className = 'row';
+        tcTitleRow.style.marginBottom = '4px';
+        const tcLbl = document.createElement('span');
+        tcLbl.style.cssText = 'font-size:12px;font-weight:600;color:var(--hint);text-transform:uppercase;letter-spacing:.6px';
+        tcLbl.textContent = 'Колір тексту';
+        tcTitleRow.appendChild(tcLbl);
+        const tcPickerEl = document.createElement('input');
+        tcPickerEl.type = 'color';
+        tcPickerEl.value = seg.textColor?.hex || '#ffffff';
+        tcPickerEl.style.cssText = 'width:32px;height:28px;border:none;background:none;padding:2px;cursor:pointer;border-radius:4px';
+        tcTitleRow.appendChild(tcPickerEl);
+        tcWrap.appendChild(tcTitleRow);
+        const tcChipsEl = document.createElement('div');
+        tcChipsEl.className = 'chips';
+        tcChipsEl.style.marginBottom = '0';
+        NAMED_COLORS.forEach(c => {
+            const chip = document.createElement('div');
+            chip.className = 'chip' + ((seg.textColor?.hex || '#ffffff') === c.hex ? ' selected' : '');
+            chip.style.background = c.hex;
+            chip.title = c.name;
+            if (c.hex === '#ffffff' || c.hex === '#ffff00') chip.style.boxShadow = 'inset 0 0 0 1px #ccc';
+            chip.onclick = () => {
+                tcChipsEl.querySelectorAll('.chip').forEach(el => el.classList.remove('selected'));
+                chip.classList.add('selected');
+                tcPickerEl.value = c.hex;
+                segments[i].textColor = { hex: c.hex, ffmpeg: c.ffmpeg };
+                if (i === activeSegIdx) redraw();
+            };
+            tcChipsEl.appendChild(chip);
+        });
+        tcWrap.appendChild(tcChipsEl);
+        tcPickerEl.oninput = () => {
+            tcChipsEl.querySelectorAll('.chip').forEach(el => el.classList.remove('selected'));
+            const hex = tcPickerEl.value;
+            segments[i].textColor = { hex, ffmpeg: hex.replace('#', '0x') };
+            if (i === activeSegIdx) redraw();
+        };
+        wrap.appendChild(tcWrap);
+
+        // Border color per segment
+        const bcWrap = document.createElement('div');
+        bcWrap.style.marginTop = '6px';
+        const bcTitleRow = document.createElement('div');
+        bcTitleRow.className = 'row';
+        bcTitleRow.style.marginBottom = '4px';
+        const bcLbl = document.createElement('span');
+        bcLbl.style.cssText = 'font-size:12px;font-weight:600;color:var(--hint);text-transform:uppercase;letter-spacing:.6px';
+        bcLbl.textContent = 'Колір обводки';
+        bcTitleRow.appendChild(bcLbl);
+        const bcPickerEl = document.createElement('input');
+        bcPickerEl.type = 'color';
+        bcPickerEl.value = seg.borderColor?.hex || '#000000';
+        bcPickerEl.style.cssText = 'width:32px;height:28px;border:none;background:none;padding:2px;cursor:pointer;border-radius:4px';
+        bcTitleRow.appendChild(bcPickerEl);
+        bcWrap.appendChild(bcTitleRow);
+        const bcChipsEl = document.createElement('div');
+        bcChipsEl.className = 'chips';
+        bcChipsEl.style.marginBottom = '0';
+        NAMED_COLORS.forEach(c => {
+            const chip = document.createElement('div');
+            chip.className = 'chip' + ((seg.borderColor?.hex || '#000000') === c.hex ? ' selected' : '');
+            chip.style.background = c.hex;
+            chip.title = c.name;
+            if (c.hex === '#ffffff' || c.hex === '#ffff00') chip.style.boxShadow = 'inset 0 0 0 1px #ccc';
+            chip.onclick = () => {
+                bcChipsEl.querySelectorAll('.chip').forEach(el => el.classList.remove('selected'));
+                chip.classList.add('selected');
+                bcPickerEl.value = c.hex;
+                segments[i].borderColor = { hex: c.hex, ffmpeg: c.ffmpeg };
+                if (i === activeSegIdx) redraw();
+            };
+            bcChipsEl.appendChild(chip);
+        });
+        bcWrap.appendChild(bcChipsEl);
+        bcPickerEl.oninput = () => {
+            bcChipsEl.querySelectorAll('.chip').forEach(el => el.classList.remove('selected'));
+            const hex = bcPickerEl.value;
+            segments[i].borderColor = { hex, ffmpeg: hex.replace('#', '0x') };
+            if (i === activeSegIdx) redraw();
+        };
+        wrap.appendChild(bcWrap);
+
         // Time controls
         const tWrap = document.createElement('div');
         tWrap.style.marginTop = '8px';
@@ -557,6 +628,8 @@ function addSegment() {
         borderAlpha: 1,
         borderSize:  parseInt($('border-size').value) || 3,
         font:        'fonts/impact.ttf',
+        textColor:   last ? { ...last.textColor }   : { hex: '#ffffff', ffmpeg: 'white' },
+        borderColor: last ? { ...last.borderColor } : { hex: '#000000', ffmpeg: 'black' },
     });
     activeSegIdx = segments.length - 1;
     renderSegments();
@@ -593,17 +666,12 @@ function buildChips(containerId, pickerEl, initHex, onChange) {
     });
 }
 
-buildChips('text-chips',   $('text-picker'),   "#ffffff", v => { textColor   = v; });
-buildChips('border-chips', $('border-picker'), "#000000", v => { borderColor = v; });
-buildChips('pad-chips',    $('pad-picker'),    "#ffffff", v => { padColor    = v; });
+buildChips('pad-chips', $('pad-picker'), "#ffffff", v => { padColor = v; });
 
 function onPickerChange(which) {
     const hex = $(which + '-picker').value;
     document.querySelectorAll(`#${which}-chips .chip`).forEach(el => el.classList.remove('selected'));
-    const val = { hex, ffmpeg: hex.replace('#', '0x') };
-    if (which === 'text') textColor = val;
-    else if (which === 'border') borderColor = val;
-    else padColor = val;
+    padColor = { hex, ffmpeg: hex.replace('#', '0x') };
     redraw();
 }
 
@@ -727,7 +795,8 @@ function redraw() {
         let textCenterX, baseY;
         if (seg.anchorX !== null) {
             textCenterX = seg.anchorX;
-            baseY       = seg.anchorY;
+            // anchorY is the visual centre of the text block; convert to baseline of first line
+            baseY       = seg.anchorY - lines.length * lineH / 2 + 0.75 * fontSize;
         } else if (selectedPos === 'above') {
             const padExtra = parseInt($('pad-extra').value) || 0;
             textCenterX = W / 2;
@@ -737,25 +806,29 @@ function redraw() {
             baseY = 10 * scale + fontSize * 0.75;
         } else {
             textCenterX = W / 2;
-            baseY = (GIF_H - 10 - lines.length * numGifPx) * scale + fontSize * 0.75;
+            // Anchor the last-line baseline at (GIF_H-10)*scale so dashes and
+            // other mid-height characters also appear near the bottom edge.
+            baseY = (GIF_H - 10) * scale - (lines.length - 1) * lineH;
         }
 
         const dimAlpha  = isActive ? 1.0 : 0.55;
         const segTAlpha  = (seg.textAlpha   ?? 1) * dimAlpha;
         const segBAlpha  = (seg.borderAlpha ?? 1) * dimAlpha;
         const segBorderSz = (seg.borderSize ?? parseInt($('border-size').value) ?? 3) * scale;
+        const segTC = seg.textColor   || textColor;
+        const segBC = seg.borderColor || borderColor;
         ctx.font = canvasFont(seg.font || 'fonts/impact.ttf', fontSize);
         lines.forEach((line, li) => {
             const y = baseY + li * lineH;
             if (segBorderSz > 0) {
                 ctx.globalAlpha = segBAlpha;
-                ctx.strokeStyle = borderColor.hex;
+                ctx.strokeStyle = segBC.hex;
                 ctx.lineWidth   = segBorderSz;
                 ctx.lineJoin    = 'round';
                 ctx.strokeText(line, textCenterX, y);
             }
             ctx.globalAlpha = segTAlpha;
-            ctx.fillStyle   = textColor.hex;
+            ctx.fillStyle   = segTC.hex;
             ctx.fillText(line, textCenterX, y);
         });
     });
@@ -770,7 +843,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
     let ny = e.clientY - rect.top;
     // In above mode: keep text within the pad area
     if (selectedPos === 'above' && lastPadH > 0)
-        ny = Math.max(lastFontSize * 0.75, Math.min(ny, lastPadH - lastFontSize * 0.25));
+        ny = Math.max(lastFontSize * 0.5, Math.min(ny, lastPadH - lastFontSize * 0.5));
     segments[activeSegIdx].anchorX = nx;
     segments[activeSegIdx].anchorY = ny;
     isDragging  = true;
@@ -784,7 +857,7 @@ canvasEl.addEventListener('pointermove', (e) => {
     let nx = e.clientX - rect.left;
     let ny = e.clientY - rect.top;
     if (selectedPos === 'above' && lastPadH > 0)
-        ny = Math.max(lastFontSize * 0.75, Math.min(ny, lastPadH - lastFontSize * 0.25));
+        ny = Math.max(lastFontSize * 0.5, Math.min(ny, lastPadH - lastFontSize * 0.5));
     segments[activeSegIdx].anchorX = nx;
     segments[activeSegIdx].anchorY = ny;
     redraw();
@@ -822,6 +895,7 @@ tg.MainButton.onClick(() => {
         const sPos   = isC && isAbove ? 'above_custom' : isC ? 'custom' : selectedPos;
         const szFont = s.sizeFont || 40;
         const sLines = (s.text || 'a').split('\n');
+        const nLines = sLines.length;
         const sNumSym  = Math.max(Math.max(...sLines.map(l => l.length)), 10);
         const sNumGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / sNumSym);
         const sFontPx  = sNumGifPx * lastScale;
@@ -832,12 +906,14 @@ tg.MainButton.onClick(() => {
                            ? 't' : s.timeEnd.toFixed(1),
             position:      sPos,
             custom_cx:     isC ? s.anchorX / lastScale : 0,
-            custom_cy_top: isC ? (s.anchorY - sFontPx * 0.75) / lastScale : 0,
+            custom_cy_top: isC ? (s.anchorY - sFontPx * nLines * 0.525) / lastScale : 0,
             size_font:     szFont,
             text_alpha:    s.textAlpha   ?? 1,
             border_alpha:  s.borderAlpha ?? 1,
             border_size:   s.borderSize  ?? parseInt($('border-size').value) ?? 3,
             font:          s.font || 'fonts/impact.ttf',
+            text_color:    s.textColor?.ffmpeg   || 'white',
+            border_color:  s.borderColor?.ffmpeg || 'black',
         };
     });
     const seg0 = segsOut[0];
@@ -845,8 +921,8 @@ tg.MainButton.onClick(() => {
     tg.sendData(JSON.stringify({
         text:          seg0.text,
         font:          seg0.font || 'fonts/impact.ttf',
-        text_color:    textColor.ffmpeg,
-        border_color:  borderColor.ffmpeg,
+        text_color:    seg0.text_color   || 'white',
+        border_color:  seg0.border_color || 'black',
         size_font:     seg0.size_font,
         size_border:   parseInt($('border-size').value),
         text_alpha:    seg0.text_alpha  ?? 1,
