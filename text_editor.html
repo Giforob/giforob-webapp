@@ -790,7 +790,7 @@ function redraw() {
         const numSym   = Math.max(Math.max(...lines.map(l => l.length)), 10);
         const numGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / numSym);
         const fontSize = numGifPx * scale;
-        const lineH    = fontSize * 1.05;
+        const lineH    = fontSize * 1.15;
 
         let textCenterX, baseY;
         if (seg.anchorX !== null) {
@@ -913,7 +913,7 @@ tg.MainButton.onClick(() => {
             time_end:      (GIF_DUR > 0 && s.timeEnd >= GIF_DUR) || s.timeEnd >= 9999
                            ? 't' : s.timeEnd.toFixed(1),
             position:      sPos,
-            custom_cx:     isC ? s.anchorX / lastScale : 0,
+            custom_cx:     isC ? s.anchorX / lastScale : GIF_W / 2,
             custom_cy_top: s._cyTopGif != null ? s._cyTopGif : 0,
             size_font:     szFont,
             text_alpha:    s.textAlpha   ?? 1,
