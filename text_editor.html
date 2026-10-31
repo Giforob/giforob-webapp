@@ -21,7 +21,8 @@
             background: var(--bg);
             color: var(--text);
             padding: 12px;
-            padding-bottom: 80px;
+            padding-top:    calc(12px + var(--tg-safe-area-inset-top, 0px));
+            padding-bottom: calc(80px + var(--tg-safe-area-inset-bottom, 0px));
             font-size: 15px;
         }
 
@@ -68,6 +69,21 @@
             font-size: 14px;
             cursor: pointer;
         }
+
+        /* ── Segment chips (above preview) ── */
+        #seg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .seg-chip {
+            min-width: 42px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 2px solid transparent;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .seg-chip.active { border-color: var(--btn); color: var(--btn); }
+        .seg-chip.add { background: none; border: 1.5px dashed var(--btn); color: var(--btn); }
 
         /* ── Row label ── */
         .row {
@@ -178,25 +194,29 @@
 
         /* ── Preview canvas ── */
         #preview {
-            width: 100%;
+            max-width: 100%;
             border-radius: 10px;
             display: block;
+            margin: 0 auto;
             background: #111;
             touch-action: none;
             cursor: crosshair;
         }
+        #preview.editing { cursor: text; }
     </style>
 </head>
 <body>
 
 <!-- PREVIEW (top) -->
-<div class="card" style="padding-bottom:10px; position:sticky; top:0; z-index:10; box-shadow:0 2px 12px rgba(0,0,0,0.18);">
+<div class="card" id="preview-card" style="padding-bottom:10px; position:sticky; top:var(--tg-safe-area-inset-top, 0px); z-index:10; box-shadow:0 2px 12px rgba(0,0,0,0.18);">
     <div class="card-title">Попередній перегляд</div>
-    <div style="position:relative;width:100%;border-radius:10px;overflow:hidden;background:#111">
-        <canvas id="preview" style="width:100%;display:block"></canvas>
+    <div id="seg-chips" style="display:none"></div>
+    <div id="preview-wrap" style="position:relative;margin:0 auto;border-radius:10px;overflow:hidden;background:#111">
+        <canvas id="preview" style="display:block"></canvas>
         <div id="no-gif-hint" style="
             display:none;position:absolute;inset:0;
             align-items:center;justify-content:center;
+            pointer-events:none;
             color:rgba(255,255,255,.45);font-size:13px;text-align:center;padding:8px">
             Відправте гіфку боту,<br>щоб побачити превʼю
         </div>
@@ -204,6 +224,12 @@
     <div id="drag-reset-row" style="display:none;text-align:center;padding-top:8px">
         <a href="#" onclick="resetDrag(); return false;"
            style="font-size:12px;color:var(--hint);text-decoration:none">✖ Скинути позицію тексту</a>
+    </div>
+    <div id="edit-hint" style="display:none;text-align:center;padding-top:6px;font-size:11px;color:var(--hint)">
+        ✏️ Редагування: тап по тексту — каретка, протягни — виділення, тап поза текстом — вийти
+    </div>
+    <div id="gesture-hint" style="display:none;text-align:center;padding-top:6px;font-size:11px;color:var(--hint)">
+        👆 перетягни текст пальцем &nbsp;·&nbsp; ✌️ два пальці — розмір &nbsp;·&nbsp; 👆👆 два тапи — редагувати
     </div>
 </div>
 
@@ -260,6 +286,33 @@ tg.ready();
 tg.expand();
 
 const $ = id => document.getElementById(id);
+
+// ── Telegram platform helpers ──
+const hf = tg.HapticFeedback;
+function hapticImpact(style) { try { hf && hf.impactOccurred(style); } catch (_) {} }
+function hapticNotify(type)  { try { hf && hf.notificationOccurred(type); } catch (_) {} }
+function hapticSelect()      { try { hf && hf.selectionChanged(); } catch (_) {} }
+let _lastSelHaptic = 0;
+function hapticSelectThrottled() {
+    const now = Date.now();
+    if (now - _lastSelHaptic > 80) { _lastSelHaptic = now; hapticSelect(); }
+}
+function setSwipes(on) { try { on ? tg.enableVerticalSwipes() : tg.disableVerticalSwipes(); } catch (_) {} }
+function hideKeyboard() { try { tg.hideKeyboard && tg.hideKeyboard(); } catch (_) {} }
+
+// Keyboard detection: on iOS innerHeight stays the same while the visible
+// viewport (viewportStableHeight) shrinks — shrink the preview then.
+let keyboardOpen = false;
+function viewportH() {
+    const stable = tg.viewportStableHeight || 0;
+    return stable > 0 ? Math.min(stable, window.innerHeight) : window.innerHeight;
+}
+tg.onEvent('viewportChanged', () => {
+    const stable = tg.viewportStableHeight || 0;
+    keyboardOpen = stable > 0 && stable < window.innerHeight - 100;
+    redraw();
+});
+tg.onEvent('themeChanged', () => redraw());
 
 // ── URL params ──
 const _params      = new URLSearchParams(window.location.search);
@@ -340,7 +393,7 @@ let selectedPos  = INITIAL_POS;
 let isDragging   = false;
 let lastScale    = 1;
 let lastFontSize = 40;
-let lastPadH     = 0;
+let lastPadH     = 0;   // pad height in CSS px
 
 // ── Segments ──
 let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf', textColor: { hex: '#ffffff', ffmpeg: 'white' }, borderColor: { hex: '#000000', ffmpeg: 'black' } }];
@@ -351,9 +404,40 @@ function fmtTime(t) {
     return t.toFixed(1) + 'с';
 }
 
+// ── Segment chips above the preview (one-tap switching on mobile) ──
+function renderSegChips() {
+    const box = $('seg-chips');
+    box.style.display = segments.length > 1 ? 'flex' : 'none';
+    box.innerHTML = '';
+    segments.forEach((seg, i) => {
+        const chip = document.createElement('button');
+        chip.className = 'seg-chip' + (i === activeSegIdx ? ' active' : '');
+        const preview = seg.text.trim().split('\n')[0];
+        chip.textContent = 'Т' + (i + 1) + (preview ? ' · ' + preview.slice(0, 8) : '');
+        chip.onclick = () => setActiveSeg(i);
+        box.appendChild(chip);
+    });
+    const add = document.createElement('button');
+    add.className = 'seg-chip add';
+    add.textContent = '+';
+    add.onclick = () => addSegment();
+    box.appendChild(add);
+}
+
+function setActiveSeg(i) {
+    if (i === activeSegIdx) return;
+    activeSegIdx = i;
+    exitEditMode();   // caret indices belong to the previous segment
+    $('drag-reset-row').style.display = segments[i].anchorX !== null ? 'block' : 'none';
+    hapticImpact('light');
+    renderSegments();
+    redraw();
+}
+
 function renderSegments() {
     const list = $('segments-list');
     list.innerHTML = '';
+    renderSegChips();
     segments.forEach((seg, i) => {
         const wrap = document.createElement('div');
         wrap.className = 'seg-item' + (i === activeSegIdx ? ' active' : '');
@@ -379,7 +463,22 @@ function renderSegments() {
         const ta = document.createElement('textarea');
         ta.placeholder = 'Введіть текст...\nМожна кілька рядків';
         ta.value = seg.text;
-        ta.oninput = () => { segments[i].text = ta.value; if (i === activeSegIdx) redraw(); };
+        ta.oninput = () => {
+            segments[i].text = ta.value;
+            if (i !== activeSegIdx) return;
+            // Keep the preview caret inside the text after edits
+            if (caretPos !== null) {
+                caretPos  = Math.min(caretPos, ta.value.length);
+                selAnchor = selAnchor === null ? null : Math.min(selAnchor, ta.value.length);
+                resetCaretBlink();
+            }
+            redraw();
+        };
+        // Caret / selection moved in the textarea → show it on the preview too
+        ta.onselect = ta.onclick = ta.onkeyup = () => { if (i === activeSegIdx) mirrorTextareaSelection(i); };
+        // Leaving the field hides the mirrored caret again (canvas caret mode
+        // keeps its own caret until the user taps outside the text)
+        ta.onblur = () => { if (!editMode) exitEditMode(); };
         ta.onfocus = () => {
             if (activeSegIdx !== i) {
                 activeSegIdx = i;
@@ -399,13 +498,16 @@ function renderSegments() {
         fsLbl.textContent = 'Розмір';
         const fsBadge  = document.createElement('span');
         fsBadge.className = 'val-badge';
+        fsBadge.dataset.role = 'fs-badge';
         fsBadge.textContent = seg.sizeFont || 40;
         const fsSlider = document.createElement('input');
         fsSlider.type = 'range'; fsSlider.min = 5; fsSlider.max = 200;
         fsSlider.value = seg.sizeFont || 40;
+        fsSlider.dataset.role = 'fs-slider';
         fsSlider.oninput = () => {
             segments[i].sizeFont = parseInt(fsSlider.value);
             fsBadge.textContent  = fsSlider.value;
+            hapticSelectThrottled();
             redraw();
         };
         fsRow.append(fsLbl, fsSlider, fsBadge);
@@ -450,6 +552,7 @@ function renderSegments() {
         bsSlider.oninput = () => {
             segments[i].borderSize = parseInt(bsSlider.value);
             bsBadge.textContent    = bsSlider.value;
+            hapticSelectThrottled();
             redraw();
         };
         bsRow.append(bsLbl, bsSlider, bsBadge);
@@ -474,6 +577,7 @@ function renderSegments() {
             segments[i].textAlpha   = v;
             segments[i].borderAlpha = v;
             aBadge.textContent = aSlider.value + '%';
+            hapticSelectThrottled();
             redraw();
         };
         aRow.append(aLbl, aSlider, aBadge);
@@ -509,6 +613,7 @@ function renderSegments() {
                 chip.classList.add('selected');
                 tcPickerEl.value = c.hex;
                 segments[i].textColor = { hex: c.hex, ffmpeg: c.ffmpeg };
+                hapticImpact('light');
                 if (i === activeSegIdx) redraw();
             };
             tcChipsEl.appendChild(chip);
@@ -552,6 +657,7 @@ function renderSegments() {
                 chip.classList.add('selected');
                 bcPickerEl.value = c.hex;
                 segments[i].borderColor = { hex: c.hex, ffmpeg: c.ffmpeg };
+                hapticImpact('light');
                 if (i === activeSegIdx) redraw();
             };
             bcChipsEl.appendChild(chip);
@@ -617,6 +723,7 @@ function renderSegments() {
 
 function addSegment() {
     const last = segments[segments.length - 1];
+    exitEditMode();
     segments.push({
         text:      '',
         timeStart: 0,
@@ -634,14 +741,21 @@ function addSegment() {
     activeSegIdx = segments.length - 1;
     renderSegments();
     const tas = $('segments-list').querySelectorAll('textarea');
-    if (tas[activeSegIdx]) tas[activeSegIdx].focus();
+    if (tas[activeSegIdx]) {
+        tas[activeSegIdx].focus();
+        // The keyboard may cover the form — scroll it into view after the
+        // keyboard has had a moment to appear.
+        setTimeout(() => tas[activeSegIdx].scrollIntoView({ block: 'center', behavior: 'smooth' }), 350);
+    }
 }
 
 function removeSegment(i) {
     if (segments.length <= 1) return;
+    exitEditMode();
     segments.splice(i, 1);
     if (activeSegIdx >= segments.length) activeSegIdx = segments.length - 1;
     renderSegments();
+    hapticImpact('light');
     redraw();
 }
 
@@ -660,6 +774,7 @@ function buildChips(containerId, pickerEl, initHex, onChange) {
             chip.classList.add('selected');
             pickerEl.value = c.hex;
             onChange({ hex: c.hex, ffmpeg: c.ffmpeg });
+            hapticImpact('light');
             redraw();
         };
         container.appendChild(chip);
@@ -679,9 +794,11 @@ function selectPos(btn) {
     document.querySelectorAll('.pos-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
     selectedPos = btn.dataset.pos;
+    exitEditMode();
     segments.forEach(s => { s.anchorX = null; s.anchorY = null; });
     $('drag-reset-row').style.display = 'none';
     $('pad-options').style.display = selectedPos === 'above' ? 'block' : 'none';
+    hapticImpact('medium');
     redraw();
 }
 
@@ -722,38 +839,281 @@ function applyWrap(text) {
     return maxLen > maxChars ? wrapText(text, maxChars) : text;
 }
 
+// Same wrapping as wrapText, but every line comes back as an array of
+// { ch, i } where i is that character's index in the original text. Whitespace
+// swallowed by the wrap keeps the index of the space it replaced, so a caret
+// position is always unambiguous.
+function wrapWithIndices(text) {
+    const maxChars = Math.max(10, Math.floor(GIF_W / 12));
+    const lines = [];
+    let pos = 0;
+    for (const rawLine of text.split('\n')) {
+        const lineStart = pos;
+        pos += rawLine.length + 1;
+        if (rawLine.length <= maxChars) {
+            const arr = [];
+            for (let k = 0; k < rawLine.length; k++) arr.push({ ch: rawLine[k], i: lineStart + k });
+            lines.push(arr);
+            continue;
+        }
+        let current = [];
+        let col = 0;
+        for (const w0 of rawLine.split(' ')) {
+            let word = w0;
+            let wordStart = lineStart + col;
+            col += word.length + 1;
+            while (word.length > maxChars) {
+                if (current.length) { lines.push(current); current = []; }
+                const chunk = [];
+                for (let k = 0; k < maxChars; k++) chunk.push({ ch: word[k], i: wordStart + k });
+                lines.push(chunk);
+                word = word.slice(maxChars);
+                wordStart += maxChars;
+            }
+            const pushWord = () => {
+                for (let k = 0; k < word.length; k++) current.push({ ch: word[k], i: wordStart + k });
+            };
+            if (!current.length) {
+                pushWord();
+            } else if (current.length + 1 + word.length <= maxChars) {
+                current.push({ ch: ' ', i: wordStart - 1 });
+                pushWord();
+            } else {
+                lines.push(current);
+                current = [];
+                pushWord();
+            }
+        }
+        if (current.length) lines.push(current);
+    }
+    return lines;
+}
+
+// ── Caret & text selection on the preview ──
+// editMode   — caret mode entered from the preview: taps place the caret and
+//              dragging selects (entered by double click / double tap).
+// caretShown — a caret/selection is drawn on the preview. Also set when the
+//              caret moves inside the textarea, which keeps dragging the text
+//              block working as before.
+let editMode    = false;
+let caretShown  = false;
+let caretPos    = null;   // caret index into segments[activeSegIdx].text
+let selAnchor   = null;   // other end of the selection (== caretPos → no selection)
+let selDragging = false;
+let caretOn     = true;
+let caretTimer  = null;
+let activeGeom  = null;   // text geometry of the active segment, filled by redraw()
+
+const _mctx = document.createElement('canvas').getContext('2d');
+const textareaFor = i => $('segments-list').querySelectorAll('textarea')[i];
+
+function selRange() {
+    if (selAnchor === null || selAnchor === caretPos || caretPos === null) return null;
+    return [Math.min(selAnchor, caretPos), Math.max(selAnchor, caretPos)];
+}
+
+function drawSelectionRects(ctx) {
+    const g = activeGeom, r = selRange();
+    if (!g || !r) return;
+    ctx.font        = canvasFont(g.font, g.fontSize);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle   = 'rgba(41,121,255,0.42)';
+    for (let li = 0; li < g.items.length; li++) {
+        const items = g.items[li];
+        if (!items.length) continue;
+        const top = g.baseY + li * g.lineH - g.fontSize * 0.8;
+        const lineW    = ctx.measureText(items.map(o => o.ch).join('')).width;
+        let x          = g.centerX - lineW / 2;
+        let runStart   = null;
+        for (let k = 0; k < items.length; k++) {
+            const cw    = ctx.measureText(items[k].ch).width;
+            const inSel = items[k].i >= r[0] && items[k].i < r[1];
+            if (inSel && runStart === null) runStart = x;
+            if (runStart !== null && (!inSel || k === items.length - 1)) {
+                const x1 = inSel ? x + cw : x;
+                ctx.fillRect(runStart, top, x1 - runStart, g.fontSize);
+                runStart = null;
+            }
+            x += cw;
+        }
+    }
+}
+
+// x/top/height of the caret for a text index (null if it lands between lines)
+function caretXY(ctx, g, p) {
+    ctx.font = canvasFont(g.font, g.fontSize);
+    let fallback = null;
+    for (let li = 0; li < g.items.length; li++) {
+        const items = g.items[li];
+        if (!items.length) continue;
+        const first = items[0].i, last = items[items.length - 1].i + 1;
+        const baseline = g.baseY + li * g.lineH;
+        const lineW = ctx.measureText(items.map(o => o.ch).join('')).width;
+        const left  = g.centerX - lineW / 2;
+        if (p >= first && p <= last) {
+            const k  = Math.max(0, Math.min(items.length, p - first));
+            const x  = left + ctx.measureText(items.slice(0, k).map(o => o.ch).join('')).width;
+            return { x, top: baseline - g.fontSize * 0.8, h: g.fontSize };
+        }
+        if (last < p) {
+            fallback = { x: left + lineW, top: baseline - g.fontSize * 0.8, h: g.fontSize };
+        }
+    }
+    return fallback;
+}
+
+function drawCaretRect(ctx) {
+    const g = activeGeom;
+    if (!g || !caretOn || caretPos === null) return;
+    const p = Math.max(0, Math.min(caretPos, (segments[activeSegIdx].text || '').length));
+    const c = caretXY(ctx, g, p);
+    if (!c) return;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle   = '#2a8cff';
+    ctx.fillRect(c.x - 1, c.top, 2, c.h);
+}
+
+// Text index closest to a point of the canvas (CSS px), or null when the point
+// is clearly outside the text block.
+function hitTestText(x, y, loose) {
+    const g = activeGeom;
+    if (!g) return null;
+    if (!segments[activeSegIdx].text) return 0;   // only the placeholder is drawn
+    _mctx.font = canvasFont(g.font, g.fontSize);
+    let best = -1, bestD = Infinity;
+    for (let li = 0; li < g.items.length; li++) {
+        if (!g.items[li].length) continue;
+        const d = Math.abs(y - (g.baseY + li * g.lineH - g.fontSize * 0.35));
+        if (d < bestD) { bestD = d; best = li; }
+    }
+    if (best < 0) return null;
+    if (!loose && bestD > g.lineH * 0.8) return null;
+    const items = g.items[best];
+    const lineW = _mctx.measureText(items.map(o => o.ch).join('')).width;
+    let x0 = g.centerX - lineW / 2;
+    for (let k = 0; k < items.length; k++) {
+        const cw = _mctx.measureText(items[k].ch).width;
+        if (x < x0 + cw / 2) return items[k].i;
+        x0 += cw;
+    }
+    return items[items.length - 1].i + 1;
+}
+
+function resetCaretBlink() {
+    caretOn = true;
+    if (caretTimer) clearInterval(caretTimer);
+    caretTimer = setInterval(() => { caretOn = !caretOn; redraw(); }, 530);
+}
+
+function setEditHint(on) {
+    $('edit-hint').style.display = on ? 'block' : 'none';
+    canvasEl.classList.toggle('editing', on);
+}
+
+// Double click / tap on the preview → caret mode: tap on the text places the
+// caret, dragging selects, typing goes straight into the textarea.
+function enterEditMode(at) {
+    editMode = true;
+    caretShown = true;
+    setEditHint(true);
+    const len = (segments[activeSegIdx].text || '').length;
+    caretPos  = (at === null || at === undefined) ? len : Math.max(0, Math.min(at, len));
+    selAnchor = caretPos;
+    const ta = textareaFor(activeSegIdx);
+    if (ta) {
+        ta.focus({ preventScroll: true });
+        ta.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        try { ta.setSelectionRange(caretPos, caretPos); } catch (_) {}
+    }
+    hapticImpact('light');
+    resetCaretBlink();
+}
+
+function exitEditMode() {
+    if (!editMode && !caretShown) return;
+    editMode = caretShown = false;
+    selDragging = false;
+    caretPos = selAnchor = null;
+    setEditHint(false);
+    if (caretTimer) { clearInterval(caretTimer); caretTimer = null; }
+}
+
+// Selection made in the textarea → mirror it onto the preview
+function mirrorTextareaSelection(i) {
+    const ta = textareaFor(i);
+    if (!ta || i !== activeSegIdx) return;
+    caretPos  = ta.selectionStart;
+    selAnchor = ta.selectionEnd;
+    caretShown = true;
+    resetCaretBlink();
+    redraw();
+}
+
+// Caret/selection moved on the preview → mirror it into the textarea
+function syncCaretToTextarea() {
+    const ta = textareaFor(activeSegIdx);
+    if (!ta) return;
+    const a = selAnchor === null ? caretPos : selAnchor;
+    try { ta.setSelectionRange(Math.min(a, caretPos), Math.max(a, caretPos)); } catch (_) {}
+}
+
 // ── Canvas preview ──
 function redraw() {
     const canvas = $('preview');
     const dpr    = window.devicePixelRatio || 1;
-    const W      = canvas.offsetWidth || canvas.parentElement.offsetWidth;
-    const scale  = W / GIF_W;
-    const H      = Math.round(W * GIF_H / GIF_W);
+    const availW = Math.max(120, ($('preview-card').clientWidth || 300) - 28);
+    activeGeom = null;
 
-    // Active segment drives pad / canvas-height calculations
+    // ── Everything is measured in GIF pixels first, then scaled to fit ──
     const activeSeg    = segments[activeSegIdx] || segments[0];
     const activeText   = applyWrap(activeSeg.text || 'Текст тут');
     const activeLines  = activeText.split('\n');
     const activeSzFont = activeSeg.sizeFont || 40;
     const activeNumSym = Math.max(Math.max(...activeLines.map(l => l.length)), 10);
     const activeNumGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * activeSzFont * (GIF_W / 15 / activeNumSym);
-    const activeFontPx   = activeNumGifPx * scale;
 
-    lastScale    = scale;
-    lastFontSize = activeFontPx;
-
-    let padH = 0, gifOffsetY = 0;
+    // Pad (in GIF px) — the content added above the gif
+    let padGif = 0;
     if (selectedPos === 'above') {
         const padExtra = parseInt($('pad-extra').value) || 0;
-        padH       = (activeLines.length * activeNumGifPx + activeSzFont + padExtra) * scale;
-        gifOffsetY = padH;
+        padGif = activeLines.length * activeNumGifPx + activeSzFont + padExtra;
     }
-    lastPadH = padH;
+    const contentH = GIF_H + padGif;   // total content height in GIF px
 
+    // Fit the whole content (pad + gif) into the available width and into
+    // ~45% of the viewport height (30% when the keyboard is open), so the
+    // sticky card never covers the UI.
+    const maxPreviewH = Math.max(120, viewportH() * (keyboardOpen ? 0.30 : 0.45));
+    const scale = Math.min(availW / GIF_W, maxPreviewH / contentH);
+
+    const W      = Math.round(GIF_W * scale);
+    const H      = Math.round(GIF_H * scale);
+    const padH   = Math.round(padGif * scale);
     const totalH = H + padH;
+    const gifOffsetY = padH;
+
+    // Anchors are stored in CSS px — keep them glued to the same spot of the
+    // gif when the scale or the pad height changes (resize / text edits).
+    if (lastScale && (scale !== lastScale || padH !== lastPadH)) {
+        const k = scale / lastScale;
+        segments.forEach(s => {
+            if (s.anchorX !== null) {
+                s.anchorX *= k;
+                s.anchorY  = padH + (s.anchorY - lastPadH) * k;
+            }
+        });
+    }
+
+    lastScale    = scale;
+    lastFontSize = activeNumGifPx * scale;
+    lastPadH     = padH;
+
+    // 1:1 buffer ↔ CSS size: no stretching of the preview
     canvas.width        = W * dpr;
     canvas.height       = totalH * dpr;
+    canvas.style.width  = W + 'px';
     canvas.style.height = totalH + 'px';
+    $('preview-wrap').style.width = W + 'px';
 
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
@@ -768,14 +1128,9 @@ function redraw() {
         ctx.fillStyle = 'rgba(0,0,0,0.18)';
         ctx.fillRect(0, gifOffsetY, W, H);
     } else {
-        // Checkerboard — makes transparency visually meaningful in the preview
-        const sq = 16;
-        for (let cx = 0; cx < W; cx += sq) {
-            for (let cy = gifOffsetY; cy < gifOffsetY + H; cy += sq) {
-                ctx.fillStyle = ((Math.floor(cx / sq) + Math.floor((cy - gifOffsetY) / sq)) % 2 === 0) ? '#cccccc' : '#ffffff';
-                ctx.fillRect(cx, cy, Math.min(sq, W - cx), Math.min(sq, gifOffsetY + H - cy));
-            }
-        }
+        // Default black screen — lets you test text placement without a gif
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, gifOffsetY, W, H);
     }
 
     // Draw ALL segments — active at full opacity, others dimmed
@@ -784,27 +1139,26 @@ function redraw() {
         const isActive = idx === activeSegIdx;
         const rawText  = seg.text || (isActive ? 'Текст тут' : '');
         if (!rawText) return;
-        const displayText = applyWrap(rawText);
-        const lines    = displayText.split('\n');
+        const items    = wrapWithIndices(rawText);
+        const lines    = items.map(it => it.map(o => o.ch).join(''));
         const szFont   = seg.sizeFont || 40;
         const numSym   = Math.max(Math.max(...lines.map(l => l.length)), 10);
         const numGifPx = Math.sqrt(GIF_W**2 + GIF_H**2) / (GIF_W + GIF_H) * szFont * (GIF_W / 15 / numSym);
         const fontSize = numGifPx * scale;
-        const lineH    = fontSize * 1.15;
+        const lineH    = fontSize * 1.05;
 
         let textCenterX, baseY;
         if (seg.anchorX !== null) {
             textCenterX = seg.anchorX;
             // anchorY is the visual centre of the text block; convert to baseline of first line
-            // 0.86 = Impact ascent fraction (cap-height / em-size)
-            baseY       = seg.anchorY - lines.length * lineH / 2 + 0.86 * fontSize;
+            baseY       = seg.anchorY - lines.length * lineH / 2 + 0.75 * fontSize;
         } else if (selectedPos === 'above') {
             const padExtra = parseInt($('pad-extra').value) || 0;
             textCenterX = W / 2;
-            baseY = ((szFont + padExtra) / 2) * scale + fontSize * 0.86;
+            baseY = ((szFont + padExtra) / 2) * scale + fontSize * 0.75;
         } else if (selectedPos === 'up') {
             textCenterX = W / 2;
-            baseY = 10 * scale + fontSize * 0.86;
+            baseY = 10 * scale + fontSize * 0.75;
         } else {
             textCenterX = W / 2;
             // Anchor the last-line baseline at (GIF_H-10)*scale so dashes and
@@ -819,12 +1173,10 @@ function redraw() {
         const segTC = seg.textColor   || textColor;
         const segBC = seg.borderColor || borderColor;
         ctx.font = canvasFont(seg.font || 'fonts/impact.ttf', fontSize);
-        // Use the browser's own glyph measurement so any character (dashes, caps, etc.)
-        // gets the exact GIF-space y regardless of its height within the em-square.
-        {
-            const m   = ctx.measureText(lines[0] || 'Т');
-            const asc = m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : fontSize * 0.86;
-            seg._cyTopGif = Math.max(0, (baseY - asc) / scale);
+        if (isActive) {
+            activeGeom = { centerX: textCenterX, baseY, fontSize, lineH, items,
+                           font: seg.font || 'fonts/impact.ttf' };
+            if (caretShown) drawSelectionRects(ctx);
         }
         lines.forEach((line, li) => {
             const y = baseY + li * lineH;
@@ -839,29 +1191,146 @@ function redraw() {
             ctx.fillStyle   = segTC.hex;
             ctx.fillText(line, textCenterX, y);
         });
+        if (isActive && caretShown) drawCaretRect(ctx);
     });
     ctx.globalAlpha = 1;
 }
 
-// ── Drag to reposition (all modes including 'above') ──
+// ── Drag to reposition + pinch to resize (all modes including 'above') ──
 const canvasEl = $('preview');
+const activePointers = new Map();   // pointerId → { x, y } in canvas CSS px
+let pinch = null;                   // { dist0, size0, segIdx } while pinching
+let preDragAnchor = null;           // anchor before the current single-finger drag
+let lastTapTime = 0;                // for double-tap / double-click detection
+let tapMoved = false;               // current tap turned into a real drag?
+let tapDownPos = null;              // where the current tap went down (CSS px)
+
+// A double click must not move the text: put the anchor back where it was
+function undoTapMove() {
+    const seg = segments[activeSegIdx];
+    if (preDragAnchor && !tapMoved) {
+        seg.anchorX = preDragAnchor.x;
+        seg.anchorY = preDragAnchor.y;
+    }
+    preDragAnchor = null;
+    $('drag-reset-row').style.display = seg.anchorX !== null ? 'block' : 'none';
+}
+
 canvasEl.addEventListener('pointerdown', (e) => {
     const rect = canvasEl.getBoundingClientRect();
+    activePointers.set(e.pointerId, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+    try { canvasEl.setPointerCapture(e.pointerId); } catch (_) {}
+
+    if (activePointers.size === 2) {
+        // Second finger → this was a pinch, not a drag: undo the anchor move
+        hideKeyboard();
+        setSwipes(false);   // our drag/pinch must not minimize/close the Mini App
+        const seg = segments[activeSegIdx];
+        selDragging = false;
+        seg.anchorX = preDragAnchor ? preDragAnchor.x : seg.anchorX;
+        seg.anchorY = preDragAnchor ? preDragAnchor.y : seg.anchorY;
+        const [p1, p2] = [...activePointers.values()];
+        pinch = { dist0: Math.hypot(p1.x - p2.x, p1.y - p2.y),
+                  size0: seg.sizeFont || 40, segIdx: activeSegIdx };
+        isDragging = false;
+        $('drag-reset-row').style.display = seg.anchorX !== null ? 'block' : 'none';
+        hapticImpact('medium');
+        redraw();
+        return;
+    }
+
+    // In edit mode a tap on the text moves the caret and dragging selects;
+    // a tap outside the text leaves edit mode and drags the whole block.
+    if (editMode) {
+        const hit = hitTestText(e.clientX - rect.left, e.clientY - rect.top, false);
+        if (hit !== null) {
+            caretPos    = hit;
+            selAnchor   = hit;
+            selDragging = true;
+            isDragging  = false;
+            setSwipes(false);   // the selection drag must not minimize the app
+            resetCaretBlink();
+            syncCaretToTextarea();
+            redraw();
+            return;
+        }
+        exitEditMode();
+    }
+
+    // Double click / double tap on the preview → start editing the text.
+    // e.detail is the browser's own click counter (mouse), the timer covers
+    // touch, where every tap has detail 1.
+    const now = Date.now();
+    const isDouble = e.detail >= 2 || (now - lastTapTime < 500);
+    lastTapTime = now;
+    if (isDouble) {
+        lastTapTime = 0;
+        isDragging = false;
+        // The first tap of the pair moved the text — put it back first, then
+        // hit-test against the restored geometry so the caret lands where the
+        // user actually clicked.
+        undoTapMove();
+        redraw();
+        enterEditMode(hitTestText(e.clientX - rect.left, e.clientY - rect.top, true));
+        redraw();
+        return;
+    }
+
+    tapMoved = false;
+    tapDownPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setSwipes(false);   // our drag/pinch must not minimize/close the Mini App
+
     let nx = e.clientX - rect.left;
     let ny = e.clientY - rect.top;
     // In above mode: keep text within the pad area
     if (selectedPos === 'above' && lastPadH > 0)
         ny = Math.max(lastFontSize * 0.5, Math.min(ny, lastPadH - lastFontSize * 0.5));
+    preDragAnchor = { x: segments[activeSegIdx].anchorX, y: segments[activeSegIdx].anchorY };
     segments[activeSegIdx].anchorX = nx;
     segments[activeSegIdx].anchorY = ny;
     isDragging  = true;
-    canvasEl.setPointerCapture(e.pointerId);
     $('drag-reset-row').style.display = 'block';
+    hapticImpact('light');
     redraw();
 });
 canvasEl.addEventListener('pointermove', (e) => {
-    if (!isDragging) return;
+    if (!activePointers.has(e.pointerId)) return;
     const rect = canvasEl.getBoundingClientRect();
+    activePointers.set(e.pointerId, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+
+    if (pinch) {
+        if (activePointers.size < 2) return;
+        const [p1, p2] = [...activePointers.values()];
+        const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        if (dist < 10) return;
+        const seg = segments[pinch.segIdx];
+        const newSize = Math.max(5, Math.min(200, Math.round(pinch.size0 * dist / pinch.dist0)));
+        if (newSize !== seg.sizeFont) {
+            seg.sizeFont = newSize;
+            syncFontUI(pinch.segIdx);
+            hapticSelectThrottled();
+        }
+        redraw();
+        return;
+    }
+    if (selDragging) {
+        const hit = hitTestText(e.clientX - rect.left, e.clientY - rect.top, true);
+        if (hit !== null && hit !== caretPos) {
+            caretPos = hit;
+            hapticSelectThrottled();
+            syncCaretToTextarea();
+            resetCaretBlink();
+            redraw();
+        }
+        return;
+    }
+    if (!isDragging) return;
+    if (tapDownPos && !tapMoved && (Math.abs(e.clientX - rect.left - tapDownPos.x) > 6 ||
+                                    Math.abs(e.clientY - rect.top  - tapDownPos.y) > 6)) {
+        tapMoved = true;
+        lastTapTime = 0;   // a real drag cancels the double-tap window
+        hideKeyboard();    // only a real drag dismisses the keyboard
+    }
     let nx = e.clientX - rect.left;
     let ny = e.clientY - rect.top;
     if (selectedPos === 'above' && lastPadH > 0)
@@ -870,8 +1339,43 @@ canvasEl.addEventListener('pointermove', (e) => {
     segments[activeSegIdx].anchorY = ny;
     redraw();
 });
-canvasEl.addEventListener('pointerup',     () => { isDragging = false; });
-canvasEl.addEventListener('pointercancel', () => { isDragging = false; });
+function endPointer(e) {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinch = null;
+    if (selDragging && activePointers.size === 0) {
+        selDragging = false;
+        setSwipes(true);
+        if (selRange()) hapticImpact('light');
+        resetCaretBlink();
+        return;
+    }
+    if (activePointers.size === 0) {
+        isDragging = false;
+        setSwipes(true);
+    }
+}
+canvasEl.addEventListener('pointerup',     endPointer);
+canvasEl.addEventListener('pointercancel', endPointer);
+
+// Safety net: browsers that deliver dblclick without a matching pointerdown
+// pair (e.g. a slow double click) still start text editing.
+canvasEl.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    const rect = canvasEl.getBoundingClientRect();
+    enterEditMode(hitTestText(e.clientX - rect.left, e.clientY - rect.top, true));
+});
+
+// Keep the per-segment font-size slider/badge in sync after a pinch
+function syncFontUI(i) {
+    const item = $('segments-list').children[i];
+    if (!item) return;
+    const slider = item.querySelector('[data-role=fs-slider]');
+    const badge  = item.querySelector('[data-role=fs-badge]');
+    if (slider) slider.value = segments[i].sizeFont;
+    if (badge)  badge.textContent = segments[i].sizeFont;
+}
+
+if (matchMedia('(pointer: coarse)').matches) $('gesture-hint').style.display = 'block';
 
 function resetDrag() {
     segments[activeSegIdx].anchorX = null;
@@ -888,6 +1392,7 @@ tg.MainButton.setText('✅ Застосувати');
 tg.MainButton.show();
 tg.MainButton.onClick(() => {
     if (!segments.some(s => s.text.trim())) {
+        hapticNotify('error');
         tg.showAlert('Будь ласка, введіть текст!');
         return;
     }
@@ -913,8 +1418,8 @@ tg.MainButton.onClick(() => {
             time_end:      (GIF_DUR > 0 && s.timeEnd >= GIF_DUR) || s.timeEnd >= 9999
                            ? 't' : s.timeEnd.toFixed(1),
             position:      sPos,
-            custom_cx:     isC ? s.anchorX / lastScale : GIF_W / 2,
-            custom_cy_top: s._cyTopGif != null ? s._cyTopGif : 0,
+            custom_cx:     isC ? s.anchorX / lastScale : 0,
+            custom_cy_top: isC ? (s.anchorY - sFontPx * nLines * 0.525) / lastScale : 0,
             size_font:     szFont,
             text_alpha:    s.textAlpha   ?? 1,
             border_alpha:  s.borderAlpha ?? 1,
@@ -926,6 +1431,7 @@ tg.MainButton.onClick(() => {
     });
     const seg0 = segsOut[0];
 
+    hapticNotify('success');
     tg.sendData(JSON.stringify({
         text:          seg0.text,
         font:          seg0.font || 'fonts/impact.ttf',
