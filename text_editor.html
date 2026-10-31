@@ -1196,6 +1196,7 @@ function redraw() {
     ctx.globalAlpha = 1;
     previewW = W;
     previewH = totalH;
+    if (snapGuide) drawCenterGuide(ctx);
     if (activeGeom && !editMode && !caretShown) drawFrame(ctx);
 }
 
@@ -1204,6 +1205,48 @@ const HANDLE_R = 15;
 let previewW = 0, previewH = 0;
 let handleDrag = null;   // { size0, cx, cy, dist0 } while the resize handle is dragged
 let pendingEdit = false; // ✎ pressed: start editing on the following click
+
+// ── Magnetic horizontal centre: the text sticks to the frame centre for 0.5 s ──
+const SNAP_ZONE = 10;        // CSS px around the centre that catch the text
+const SNAP_BREAKOUT = 40;    // moving this far from the centre breaks the hold early
+const SNAP_HOLD_MS = 500;
+let snapState = null;        // { since } while held, { released: true } until the finger leaves the zone
+let snapGuide = false;
+
+function applyCenterSnap(x) {
+    const c = previewW / 2;
+    const d = Math.abs(x - c);
+    const now = Date.now();
+    if (snapState && snapState.released) {
+        if (d > SNAP_ZONE) snapState = null;
+        snapGuide = false;
+        return x;
+    }
+    if (!snapState) {
+        if (d > SNAP_ZONE) { snapGuide = false; return x; }
+        snapState = { since: now };
+        hapticImpact('medium');
+    }
+    if (d > SNAP_BREAKOUT || now - snapState.since > SNAP_HOLD_MS) {
+        snapState = d > SNAP_ZONE ? null : { released: true };
+        snapGuide = false;
+        return x;
+    }
+    snapGuide = true;
+    return c;
+}
+
+function drawCenterGuide(ctx) {
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,64,129,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(previewW / 2, 0);
+    ctx.lineTo(previewW / 2, previewH);
+    ctx.stroke();
+    ctx.restore();
+}
 
 function frameBox(g) {
     _mctx.font = canvasFont(g.font, g.fontSize);
@@ -1447,6 +1490,7 @@ canvasEl.addEventListener('pointermove', (e) => {
     }
     let nx = e.clientX - rect.left;
     let ny = e.clientY - rect.top;
+    nx = applyCenterSnap(nx);
     if (selectedPos === 'above' && lastPadH > 0)
         ny = Math.max(lastFontSize * 0.5, Math.min(ny, lastPadH - lastFontSize * 0.5));
     segments[activeSegIdx].anchorX = nx;
@@ -1456,6 +1500,8 @@ canvasEl.addEventListener('pointermove', (e) => {
 function endPointer(e) {
     activePointers.delete(e.pointerId);
     handleDrag = null;
+    snapState = null;
+    if (snapGuide) { snapGuide = false; redraw(); }
     if (activePointers.size < 2) pinch = null;
     if (selDragging && activePointers.size === 0) {
         selDragging = false;
