@@ -575,10 +575,44 @@ function renderSegments() {
         anSel.oninput = () => {
             segments[i].anim = anSel.value;
             activeSegIdx = i;
+            adRow.style.display = anSel.value && anSel.value !== 'shake' ? '' : 'none';
+            animRefresh[i]();
             if (anSel.value) startAnimPreview(); else stopAnimPreview();
         };
         anRow.append(anLbl, anSel);
         wrap.appendChild(anRow);
+
+        // Animation duration (fade/slide length, or cycle period for blink/pulse/shake)
+        const adRow = document.createElement('div');
+        adRow.className = 'row';
+        // Visually nested under "Анімація"
+        adRow.style.cssText = 'margin:4px 0 0 10px;padding-left:10px;border-left:2px solid var(--hint);';
+        adRow.style.display = seg.anim && seg.anim !== 'shake' ? '' : 'none';
+        const adLbl = document.createElement('span');
+        adLbl.className = 'row-label';
+        adLbl.style.fontSize = '13px';
+        adLbl.textContent = 'Тривалість';
+        const adBadge = document.createElement('span');
+        adBadge.className = 'val-badge';
+        const adSlider = document.createElement('input');
+        adSlider.type = 'range'; adSlider.min = 0.1; adSlider.step = 0.1;
+        animRefresh[i] = () => {
+            const max = animDurMax(segments[i]);
+            adSlider.max = max;
+            segments[i].animDur = Math.min(segments[i].animDur ?? 0.6, max);
+            adSlider.value = segments[i].animDur;
+            adBadge.textContent = segments[i].animDur.toFixed(1) + ' с';
+        };
+        animRefresh[i]();
+        adSlider.oninput = () => {
+            segments[i].animDur = parseFloat(adSlider.value);
+            adBadge.textContent = parseFloat(adSlider.value).toFixed(1) + ' с';
+            activeSegIdx = i;
+            hapticSelectThrottled();
+            startAnimPreview();
+        };
+        adRow.append(adLbl, adSlider, adBadge);
+        wrap.appendChild(adRow);
 
         // Transparency per segment (one slider controls both text and border)
         const aRow   = document.createElement('div');
@@ -716,6 +750,7 @@ function renderSegments() {
                     if (isStart) v = Math.min(v, segments[i].timeEnd - 0.1);
                     else         v = Math.max(v, segments[i].timeStart + 0.1);
                     range.value = v; segments[i][key] = v; badge.textContent = fmtTime(v);
+                    animRefresh[i]();
                 };
                 row.append(rl, range, badge);
                 tWrap.appendChild(row);
@@ -727,7 +762,7 @@ function renderSegments() {
                 const inp = document.createElement('input');
                 inp.type = 'text'; inp.placeholder = ph; inp.inputMode = 'decimal';
                 inp.value = seg[k] > 0 && seg[k] < 9999 ? seg[k].toFixed(1) : '';
-                inp.oninput = () => { segments[i][k] = parseFloat(inp.value) || (k === 'timeEnd' ? 9999 : 0); };
+                inp.oninput = () => { segments[i][k] = parseFloat(inp.value) || (k === 'timeEnd' ? 9999 : 0); animRefresh[i](); };
                 tRow.appendChild(inp);
             });
             tWrap.appendChild(tRow);
@@ -1090,21 +1125,32 @@ const ANIM_FADE = 0.6;   // keep in sync with ANIM_FADE_SEC in processors/gif_op
 let animT = null, animRaf = 0, animStart = 0;
 
 // Mirrors build_text_anim() from the backend: returns { a, dx, dy } in GIF px.
-function animState(anim, tl, remaining) {
+function animState(anim, tl, remaining, d = ANIM_FADE) {
     const clip = v => Math.min(1, Math.max(0, v));
-    const fi = clip(tl / ANIM_FADE), fo = clip(remaining / ANIM_FADE);
+    const fi = clip(tl / d), fo = clip(remaining / d);
     switch (anim) {
         case 'fade_in':     return { a: fi, dx: 0, dy: 0 };
         case 'fade_out':    return { a: fo, dx: 0, dy: 0 };
         case 'fade_in_out': return { a: fi * fo, dx: 0, dy: 0 };
-        case 'blink':       return { a: (tl % 0.6) < 0.3 ? 1 : 0, dx: 0, dy: 0 };
-        case 'pulse':       return { a: 0.6 + 0.4 * Math.sin(2 * Math.PI * 2 * tl), dx: 0, dy: 0 };
+        case 'blink':       return { a: (tl % d) < d / 2 ? 1 : 0, dx: 0, dy: 0 };
+        case 'pulse':       return { a: 0.6 + 0.4 * Math.sin(2 * Math.PI * tl / d), dx: 0, dy: 0 };
         case 'slide_up':    return { a: fi, dx: 0, dy: (1 - fi) * 40 };
         case 'slide_down':  return { a: fi, dx: 0, dy: -(1 - fi) * 40 };
-        case 'shake':       return { a: 1, dx: 6 * Math.sin(2 * Math.PI * 8 * tl), dy: 0 };
+        case 'shake':       return { a: 1, dx: 6 * Math.sin(2 * Math.PI * 5 * tl / ANIM_FADE), dy: 0 };  // fixed speed
     }
     return { a: 1, dx: 0, dy: 0 };
 }
+const ANIM_DUR_MAX = 5;  // keep in sync with ANIM_DUR_MAX in processors/gif_ops.py
+const animRefresh = [];  // per-segment callbacks that re-limit the duration slider
+
+// Longest allowed animation: the segment length (half of it for fade_in_out)
+function animDurMax(seg) {
+    const end = seg.timeEnd >= 9999 ? (GIF_DUR > 0 ? GIF_DUR : null) : seg.timeEnd;
+    let max = end === null ? ANIM_DUR_MAX : Math.min(ANIM_DUR_MAX, end - seg.timeStart);
+    if (seg.anim === 'fade_in_out') max /= 2;
+    return Math.max(0.1, Math.floor(max * 10) / 10);
+}
+
 function startAnimPreview() {
     cancelAnimationFrame(animRaf);
     animStart = performance.now();
@@ -1233,9 +1279,10 @@ function redraw() {
         let animA = 1, animDx = 0, animDy = 0;
         if (animT !== null && seg.anim) {
             // Loop over the segment length (or 3 s when the gif length is unknown)
-            const segLen = Math.max(0.5, (GIF_DUR > 0 ? Math.min(seg.timeEnd, GIF_DUR) : 3) - seg.timeStart);
+            const segLen = Math.max(0.5, (GIF_DUR > 0 ? Math.min(seg.timeEnd, GIF_DUR) : 3) - seg.timeStart,
+                                    (seg.animDur ?? ANIM_FADE) + 0.5);
             const tl = animT % segLen;
-            const st = animState(seg.anim, tl, segLen - tl);
+            const st = animState(seg.anim, tl, segLen - tl, seg.animDur ?? ANIM_FADE);
             animA = st.a; animDx = st.dx * scale; animDy = st.dy * scale;
         }
         const segTAlpha  = (seg.textAlpha   ?? 1) * dimAlpha * animA;
@@ -1672,6 +1719,7 @@ tg.MainButton.onClick(() => {
             border_size:   s.borderSize  ?? parseInt($('border-size').value) ?? 3,
             font:          s.font || 'fonts/impact.ttf',
             anim:          s.anim || '',
+            anim_dur:      s.animDur ?? 0.6,
             text_color:    s.textColor?.ffmpeg   || 'white',
             border_color:  s.borderColor?.ffmpeg || 'black',
         };
@@ -1696,6 +1744,7 @@ tg.MainButton.onClick(() => {
         time_start:    seg0.time_start,
         time_end:      seg0.time_end,
         anim:          seg0.anim,
+        anim_dur:      seg0.anim_dur,
         dur:           GIF_DUR,
         segments:      segsOut,
     }));
