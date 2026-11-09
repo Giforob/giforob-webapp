@@ -396,7 +396,7 @@ let lastFontSize = 40;
 let lastPadH     = 0;   // pad height in CSS px
 
 // ── Segments ──
-let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf', textColor: { hex: '#ffffff', ffmpeg: 'white' }, borderColor: { hex: '#000000', ffmpeg: 'black' } }];
+let segments     = [{ text: '', timeStart: 0, timeEnd: GIF_DUR > 0 ? GIF_DUR : 9999, anim: '', anchorX: null, anchorY: null, sizeFont: 40, textAlpha: 1, borderAlpha: 1, borderSize: 3, font: 'fonts/impact.ttf', textColor: { hex: '#ffffff', ffmpeg: 'white' }, borderColor: { hex: '#000000', ffmpeg: 'black' } }];
 let activeSegIdx = 0;
 
 function fmtTime(t) {
@@ -557,6 +557,28 @@ function renderSegments() {
         };
         bsRow.append(bsLbl, bsSlider, bsBadge);
         wrap.appendChild(bsRow);
+
+        // Animation per segment (rendered by ffmpeg drawtext on the backend)
+        const anRow = document.createElement('div');
+        anRow.className = 'row';
+        anRow.style.marginTop = '8px';
+        const anLbl = document.createElement('span');
+        anLbl.className = 'row-label';
+        anLbl.textContent = 'Анімація';
+        const anSel = document.createElement('select');
+        TEXT_ANIMS.forEach(([val, label]) => {
+            const opt = document.createElement('option');
+            opt.value = val; opt.textContent = label;
+            if ((seg.anim || '') === val) opt.selected = true;
+            anSel.appendChild(opt);
+        });
+        anSel.oninput = () => {
+            segments[i].anim = anSel.value;
+            activeSegIdx = i;
+            if (anSel.value) startAnimPreview(); else stopAnimPreview();
+        };
+        anRow.append(anLbl, anSel);
+        wrap.appendChild(anRow);
 
         // Transparency per segment (one slider controls both text and border)
         const aRow   = document.createElement('div');
@@ -728,6 +750,7 @@ function addSegment() {
         text:      '',
         timeStart: 0,
         timeEnd:   GIF_DUR > 0 ? GIF_DUR : 9999,
+        anim:      '',
         anchorX:   null,
         anchorY:   null,
         sizeFont:    40,
@@ -1058,6 +1081,46 @@ function syncCaretToTextarea() {
 }
 
 // ── Canvas preview ──
+const TEXT_ANIMS = [
+    ['', 'Без анімації'], ['fade_in', 'Поступова поява'], ['fade_out', 'Поступове зникнення'],
+    ['fade_in_out', 'Поява + зникнення'], ['blink', 'Мигання'], ['pulse', 'Пульсація'],
+    ['slide_up', 'Виїзд знизу'], ['slide_down', 'Виїзд зверху'], ['shake', 'Тряска'],
+];
+const ANIM_FADE = 0.6;   // keep in sync with ANIM_FADE_SEC in processors/gif_ops.py
+let animT = null, animRaf = 0, animStart = 0;
+
+// Mirrors build_text_anim() from the backend: returns { a, dx, dy } in GIF px.
+function animState(anim, tl, remaining) {
+    const clip = v => Math.min(1, Math.max(0, v));
+    const fi = clip(tl / ANIM_FADE), fo = clip(remaining / ANIM_FADE);
+    switch (anim) {
+        case 'fade_in':     return { a: fi, dx: 0, dy: 0 };
+        case 'fade_out':    return { a: fo, dx: 0, dy: 0 };
+        case 'fade_in_out': return { a: fi * fo, dx: 0, dy: 0 };
+        case 'blink':       return { a: (tl % 0.6) < 0.3 ? 1 : 0, dx: 0, dy: 0 };
+        case 'pulse':       return { a: 0.6 + 0.4 * Math.sin(2 * Math.PI * 2 * tl), dx: 0, dy: 0 };
+        case 'slide_up':    return { a: fi, dx: 0, dy: (1 - fi) * 40 };
+        case 'slide_down':  return { a: fi, dx: 0, dy: -(1 - fi) * 40 };
+        case 'shake':       return { a: 1, dx: 6 * Math.sin(2 * Math.PI * 8 * tl), dy: 0 };
+    }
+    return { a: 1, dx: 0, dy: 0 };
+}
+function startAnimPreview() {
+    cancelAnimationFrame(animRaf);
+    animStart = performance.now();
+    const tick = now => {
+        animT = (now - animStart) / 1000;
+        redraw();
+        animRaf = requestAnimationFrame(tick);
+    };
+    animRaf = requestAnimationFrame(tick);
+}
+function stopAnimPreview() {
+    cancelAnimationFrame(animRaf);
+    animT = null;
+    redraw();
+}
+
 function redraw() {
     const canvas = $('preview');
     const dpr    = window.devicePixelRatio || 1;
@@ -1167,8 +1230,16 @@ function redraw() {
         }
 
         const dimAlpha  = isActive ? 1.0 : 0.55;
-        const segTAlpha  = (seg.textAlpha   ?? 1) * dimAlpha;
-        const segBAlpha  = (seg.borderAlpha ?? 1) * dimAlpha;
+        let animA = 1, animDx = 0, animDy = 0;
+        if (animT !== null && seg.anim) {
+            // Loop over the segment length (or 3 s when the gif length is unknown)
+            const segLen = Math.max(0.5, (GIF_DUR > 0 ? Math.min(seg.timeEnd, GIF_DUR) : 3) - seg.timeStart);
+            const tl = animT % segLen;
+            const st = animState(seg.anim, tl, segLen - tl);
+            animA = st.a; animDx = st.dx * scale; animDy = st.dy * scale;
+        }
+        const segTAlpha  = (seg.textAlpha   ?? 1) * dimAlpha * animA;
+        const segBAlpha  = (seg.borderAlpha ?? 1) * dimAlpha * animA;
         const segBorderSz = (seg.borderSize ?? parseInt($('border-size').value) ?? 3) * scale;
         const segTC = seg.textColor   || textColor;
         const segBC = seg.borderColor || borderColor;
@@ -1179,17 +1250,18 @@ function redraw() {
             if (caretShown) drawSelectionRects(ctx);
         }
         lines.forEach((line, li) => {
-            const y = baseY + li * lineH;
+            const y = baseY + li * lineH + animDy;
+            const cx = textCenterX + animDx;
             if (segBorderSz > 0) {
                 ctx.globalAlpha = segBAlpha;
                 ctx.strokeStyle = segBC.hex;
                 ctx.lineWidth   = segBorderSz;
                 ctx.lineJoin    = 'round';
-                ctx.strokeText(line, textCenterX, y);
+                ctx.strokeText(line, cx, y);
             }
             ctx.globalAlpha = segTAlpha;
             ctx.fillStyle   = segTC.hex;
-            ctx.fillText(line, textCenterX, y);
+            ctx.fillText(line, cx, y);
         });
         if (isActive && caretShown) drawCaretRect(ctx);
     });
@@ -1201,7 +1273,11 @@ function redraw() {
 }
 
 // ── Interactive frame around the active text: delete / edit / resize handles ──
-const HANDLE_R = 15;
+// Handle radius follows the text size so small text isn't covered by the buttons
+function handleR() {
+    const fs = activeGeom ? activeGeom.fontSize : 40;
+    return Math.max(7, Math.min(15, fs * 0.3));
+}
 let previewW = 0, previewH = 0;
 let handleDrag = null;   // { size0, cx, cy, dist0 } while the resize handle is dragged
 let pendingEdit = false; // ✎ pressed: start editing on the following click
@@ -1261,12 +1337,14 @@ function frameBox(g) {
 }
 
 function frameHandles(b) {
-    const clampX = (x) => Math.max(HANDLE_R, Math.min(previewW - HANDLE_R, x));
-    const clampY = (y) => Math.max(HANDLE_R, Math.min(previewH - HANDLE_R, y));
+    const r = handleR();
+    const o = r * 0.6;   // push the buttons outward so they sit on the corners, not on the glyphs
+    const clampX = (x) => Math.max(r, Math.min(previewW - r, x));
+    const clampY = (y) => Math.max(r, Math.min(previewH - r, y));
     return [
-        { type: 'delete', x: clampX(b.x0), y: clampY(b.y0), color: '#e53935', icon: '✕' },
-        { type: 'edit',   x: clampX(b.x0), y: clampY(b.y1), color: '#1e88e5', icon: '✎' },
-        { type: 'resize', x: clampX(b.x1), y: clampY(b.y1), color: '#607d8b', icon: '⤡' },
+        { type: 'delete', x: clampX(b.x0 - o), y: clampY(b.y0 - o), color: '#e53935', icon: '✕' },
+        { type: 'edit',   x: clampX(b.x0 - o), y: clampY(b.y1 + o), color: '#1e88e5', icon: '✎' },
+        { type: 'resize', x: clampX(b.x1 + o), y: clampY(b.y1 + o), color: '#607d8b', icon: '⤡' },
     ];
 }
 
@@ -1284,10 +1362,10 @@ function drawFrame(ctx) {
     ctx.shadowBlur = 0;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '16px sans-serif';
+    ctx.font = `${Math.round(handleR() * 1.05)}px sans-serif`;
     frameHandles(b).forEach(h => {
         ctx.beginPath();
-        ctx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2);
+        ctx.arc(h.x, h.y, handleR(), 0, Math.PI * 2);
         ctx.fillStyle = h.color;
         ctx.fill();
         ctx.lineWidth = 2;
@@ -1302,7 +1380,7 @@ function drawFrame(ctx) {
 function hitHandle(x, y) {
     if (!activeGeom || editMode) return null;
     const b = frameBox(activeGeom);
-    const handle = frameHandles(b).find(h => Math.hypot(x - h.x, y - h.y) <= HANDLE_R + 6);
+    const handle = frameHandles(b).find(h => Math.hypot(x - h.x, y - h.y) <= handleR() + 6);
     return handle ? { handle, box: b } : null;
 }
 
@@ -1593,6 +1671,7 @@ tg.MainButton.onClick(() => {
             border_alpha:  s.borderAlpha ?? 1,
             border_size:   s.borderSize  ?? parseInt($('border-size').value) ?? 3,
             font:          s.font || 'fonts/impact.ttf',
+            anim:          s.anim || '',
             text_color:    s.textColor?.ffmpeg   || 'white',
             border_color:  s.borderColor?.ffmpeg || 'black',
         };
@@ -1616,6 +1695,8 @@ tg.MainButton.onClick(() => {
         pad_extra:     parseInt($('pad-extra').value) || 0,
         time_start:    seg0.time_start,
         time_end:      seg0.time_end,
+        anim:          seg0.anim,
+        dur:           GIF_DUR,
         segments:      segsOut,
     }));
 });
